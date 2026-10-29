@@ -1,0 +1,101 @@
+<div align="center">
+
+# Lurk
+
+**See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.**
+
+A [BetterDiscord](https://betterdiscord.app) plugin by [Vitor](https://github.com/vitor-galdino)
+
+[![Version](https://img.shields.io/github/v/release/vitor-galdino/lurk-bd?label=version&color=5865F2)](https://github.com/vitor-galdino/lurk-bd/releases)
+[![Download](https://img.shields.io/badge/download-Lurk.plugin.js-43b581)](https://raw.githubusercontent.com/vitor-galdino/lurk-bd/main/Lurk.plugin.js)
+
+</div>
+
+---
+
+## Features
+
+### ⌨️ Typed & quit
+- Logs everyone who starts typing in your DMs or group DMs and stops **without sending**: when they started, how long they typed, when they stopped, and how many attempts they made.
+- Works for anyone with a DM to you, including people who aren't your friends and DMs you've closed.
+- Their avatar shows up in the server sidebar, under the Discord button, with a typing indicator on top. Click it to open the DM.
+- Marks "sent later" when the person eventually sends a message.
+- Optional status log (online, idle, invisible, device) at the moment they typed.
+
+### ⭐ VIP list
+Add people from their right-click menu or by user ID, and Lurk keeps a closer watch on them:
+- **Status timeline**: online, idle, DND, offline and device, plus time online today. Lurk can tell when a friend is **invisible** (they show as offline but are typing or sending messages).
+- **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
+- **Typed & quit in servers**, across all your shared servers (experimental).
+- **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
+- Per-VIP choice of which events notify you.
+
+### 🕘 VIP history
+A single feed (clock button in the top bar) with an unread badge:
+- **Messages**: everything your VIPs deleted or edited, in DMs and servers.
+- **Status**: every status change.
+- **People**: each VIP with their full history.
+
+### @ Mentions
+- **Ghost pings**: someone mentions you, then deletes the message or edits the mention out.
+- **Deleted replies** to your messages.
+- **Removed reactions** on your messages.
+- **Keywords**: whole-word, case- and accent-insensitive, with an option to ignore muted servers.
+
+### 👤 New contacts
+- **First-time typers**: someone who never talked to you typed and stopped without sending. People who do send aren't listed, which keeps spam bots out.
+- **Canceled friend requests**: someone sent you a request and took it back.
+
+### 📞 Call time
+Total time in calls with each person, with every session listed.
+
+### And also
+- **Notifications** per event: in-app toast, desktop notification and/or sound, with a master switch for in-app toasts.
+- **Sounds**: a beep, any Discord sound, or your own audio file, with a volume setting.
+- **Focus mode**: silences notifications while you're on Do Not Disturb or playing a game. Everything is still logged.
+- **Automatic backups** that you can restore, plus export and import to a file.
+- **Ignore list** for people and groups.
+- **English and Portuguese (Brazil)**. Follows your Discord language, or pick one.
+- **Choose the icon**: ghost, ninja mask or eye.
+- **Updates itself**, and after each update asks whether you want to see what's new.
+
+## Installation
+
+1. Install [BetterDiscord](https://betterdiscord.app).
+2. Download **[Lurk.plugin.js](https://raw.githubusercontent.com/vitor-galdino/lurk-bd/main/Lurk.plugin.js)** (right-click → *Save link as…*).
+3. Open Discord → **User Settings → Plugins → Open Plugins Folder** and drop the file there.
+4. Turn **Lurk** on.
+
+## Usage
+
+| Where | What it does |
+| --- | --- |
+| Lurk button (top bar) | Opens Lurk: typed & quit, VIPs, mentions, new contacts, calls and settings |
+| Clock button (top bar) | VIP history: deleted/edited messages, status changes, people |
+| Server sidebar | Avatar of whoever is typing to you right now; click to open the DM |
+| Right-click a user | See their attempts, add or remove them as VIP, see call time, ignore them |
+| Right-click a group or channel | See typing attempts and deleted/edited messages there |
+| Settings → Plugins → Lurk ⚙️ | All settings, with search |
+
+Discord only sends the typing signal about every 10 seconds, so typing durations are shown as approximate ranges.
+
+## Updates
+
+Lurk checks this repository when Discord starts and every 6 hours, and installs new versions on its own. Updates are always on, so bug and security fixes reach everyone. After an update, Lurk asks whether you want to see what changed. Under **Settings → Updates** you can:
+- choose whether to see the release notes: *Ask me*, *Always show* or *Don't show*,
+- check for updates now.
+
+## Privacy
+
+- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIP.config.json`, `LurkBackup.config.json`…). Nothing is uploaded anywhere.
+- The only network request Lurk makes is to download its own updates from this repository.
+- Lurk only sees what your Discord client already receives. It can't read other people's DMs or servers you're not in.
+- Don't share your config files: they contain your logs.
+
+## Disclaimer
+
+Client modifications are against Discord's Terms of Service. Use BetterDiscord and this plugin at your own risk. Please respect other people's privacy.
+
+## License
+
+[MIT](LICENSE)
