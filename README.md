@@ -6,7 +6,6 @@
 
 A [BetterDiscord](https://betterdiscord.app) plugin by [Vitor](https://github.com/vitor-galdino)
 
-[![Version](https://img.shields.io/github/v/release/vitor-galdino/lurk-bd?label=version&color=5865F2)](https://github.com/vitor-galdino/lurk-bd/releases)
 [![Download](https://img.shields.io/badge/download-Lurk.plugin.js-43b581)](https://raw.githubusercontent.com/vitor-galdino/lurk-bd/main/Lurk.plugin.js)
 
 </div>
