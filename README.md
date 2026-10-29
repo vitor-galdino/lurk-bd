@@ -6,7 +6,7 @@
 
 A [BetterDiscord](https://betterdiscord.app) plugin by [Vitor](https://github.com/vitor-galdino)
 
-[![Download](https://img.shields.io/badge/download-Lurk.plugin.js-43b581)](https://raw.githubusercontent.com/vitor-galdino/lurk-bd/main/Lurk.plugin.js)
+[![Download](https://img.shields.io/badge/download-Lurk.plugin.js-43b581)](https://github.com/vitor-galdino/lurk-bd/releases/latest/download/Lurk.plugin.js)
 
 </div>
 
@@ -56,12 +56,12 @@ Total time in calls with each person, with every session listed.
 - **Ignore list** for people and groups.
 - **English and Portuguese (Brazil)**. Follows your Discord language, or pick one.
 - **Choose the icon**: ghost, ninja mask or eye.
-- **Updates itself**, and after each update asks whether you want to see what's new.
+- **Updates itself**, and shows what's new after each update.
 
 ## Installation
 
 1. Install [BetterDiscord](https://betterdiscord.app).
-2. Download **[Lurk.plugin.js](https://raw.githubusercontent.com/vitor-galdino/lurk-bd/main/Lurk.plugin.js)** (right-click → *Save link as…*).
+2. Download **[Lurk.plugin.js](https://github.com/vitor-galdino/lurk-bd/releases/latest/download/Lurk.plugin.js)** from the [latest release](https://github.com/vitor-galdino/lurk-bd/releases/latest).
 3. Open Discord → **User Settings → Plugins → Open Plugins Folder** and drop the file there.
 4. Turn **Lurk** on.
 
@@ -80,9 +80,7 @@ Discord only sends the typing signal about every 10 seconds, so typing durations
 
 ## Updates
 
-Lurk checks this repository when Discord starts and every 6 hours, and installs new versions on its own. Updates are always on, so bug and security fixes reach everyone. After an update, Lurk asks whether you want to see what changed. Under **Settings → Updates** you can:
-- choose whether to see the release notes: *Ask me*, *Always show* or *Don't show*,
-- check for updates now.
+Lurk keeps itself up to date. After each update, a window shows what's new in that version.
 
 ## Privacy
 

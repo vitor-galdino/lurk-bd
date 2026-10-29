@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [Lurk.plugin.js]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: v
+        run: echo "version=$(grep -m1 -oP '@version\s+\K[\d.]+' Lurk.plugin.js)" >> "$GITHUB_OUTPUT"
+      - name: Build notes
+        run: |
+          node -e '
+          const s = require("fs").readFileSync("Lurk.plugin.js", "utf8");
+          const v = process.argv[1];
+          const start = s.indexOf("{ version: \"" + v + "\"");
+          const titles = { new: "New", improved: "Improved", fixed: "Fixed" };
+          let out = "";
+          if (start >= 0) {
+            const block = s.slice(start, s.indexOf("] },", start));
+            const items = [...block.matchAll(/\[\s*"(new|improved|fixed)",\s*"(?:[^"\\]|\\.)*",\s*"((?:[^"\\]|\\.)*)"\s*\]/g)];
+            for (const t of ["new", "improved", "fixed"]) {
+              const list = items.filter((m) => m[1] === t).map((m) => "- " + m[2].replace(/\\(.)/g, "$1"));
+              if (list.length) out += "### " + titles[t] + "\n" + list.join("\n") + "\n\n";
+            }
+          }
+          out += "**Install:** download `Lurk.plugin.js` below and put it in your BetterDiscord plugins folder.";
+          require("fs").writeFileSync("notes.md", out);
+          ' "${{ steps.v.outputs.version }}"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          if gh release view "v$V" >/dev/null 2>&1; then
+            gh release upload "v$V" Lurk.plugin.js --clobber
+          else
+            gh release create "v$V" Lurk.plugin.js --title "Lurk $V" --notes-file notes.md --latest
+          fi

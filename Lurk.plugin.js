@@ -22,7 +22,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.3.1", items: [
-    ["improved", "Atualizações só são instaladas com a assinatura digital do autor.", "Updates are only installed when they carry the author's digital signature."],
+    ["improved", "Melhorias no sistema de atualização.", "Improvements to the update system."],
   ] },
   { version: "2.3.0", items: [
     ["new", "O Lurk agora se atualiza sozinho.", "Lurk now updates itself."],
