@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.3.0
+ * @version 2.3.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -11,24 +11,28 @@
 "use strict";
 
 const PLUGIN = "Lurk";
-const LEGACY = "DMTypingTracker"; // nome antigo, só para migrar os dados
-const VERSION = "2.3.0";
+const LEGACY = "DMTypingTracker";
+const VERSION = "2.3.1";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
-// Novidades de cada versão (aparecem depois que o Lurk se atualiza)
+const UPDATE_KEYS = [
+  "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgzsb/BybDBFlRtuf+h7CzzL2fCwv6UB/ZWrwCW6QOEYCrfs0i98nGKu5RfmqflmrCQxzxPFLtSfgsgDnFxCV7g==",
+  "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErGKKuLINLNb8jUacny/XD7TtIn+CBLv99OVs9JjRIlyRNM/lqUFAxPUKmJlDCraTwx25BzyL8KtdyT7p8OUh1g==",
+];
+
 const CHANGELOG = [
+  { version: "2.3.1", items: [
+    ["improved", "Atualizações só são instaladas com a assinatura digital do autor.", "Updates are only installed when they carry the author's digital signature."],
+  ] },
   { version: "2.3.0", items: [
     ["new", "O Lurk agora se atualiza sozinho.", "Lurk now updates itself."],
     ["new", "Depois de cada atualização você escolhe se quer ver as novidades. Ajuste em Ajustes › Atualizações.", "After each update you choose whether to see what's new. Change it in Settings › Updates."],
   ] },
 ];
 const { Webpack, Patcher, React, Components, Data, UI, DOM, ContextMenu, Logger } = new BdApi(PLUGIN);
-const RawData = BdApi.Data; // arquivos separados (VIP, menções, calls, som, backup)
+const RawData = BdApi.Data;
 const h = React.createElement;
 
-/* ================================================================== */
-/* Stores / módulos do Discord (tudo com fallback)                     */
-/* ================================================================== */
 const safe = (fn) => { try { return fn() ?? null; } catch { return null; } };
 const store = (name) => safe(() => Webpack.getStore(name));
 const UserStore = store("UserStore");
@@ -60,8 +64,7 @@ const RelationshipActions = safe(() => Webpack.getModule((m) => typeof m?.remove
 const ProfileActions = safe(() => Webpack.getModule((m) => typeof m?.fetchProfile === "function"));
 const UserFetcher = safe(() => Webpack.getModule((m) => typeof m?.getUser === "function" && typeof m?.fetchCurrentUser === "function"));
 const GatewayModule = safe(() => Webpack.getByKeys("getSocket"));
-// Sons do Discord: o módulo tem nomes de funções minificados, então é achado pelo código
-// (mesma assinatura que o BDFDB usa) e as funções pelo que fazem.
+
 const SoundUtils = (() => {
   const raw = safe(() => Webpack.getModule((m) => typeof m?.playSound === "function"))
     || safe(() => Webpack.getModule(Webpack.Filters.bySource(".disableSounds)", ".getSoundpack()", "Unable to find sound for pack name")));
@@ -74,13 +77,10 @@ const SoundUtils = (() => {
 })();
 const ReactDOMClient = safe(() => (BdApi.ReactDOM?.createRoot ? BdApi.ReactDOM : Webpack.getByKeys("createRoot", "hydrateRoot")));
 
-/* ================================================================== */
-/* Configurações                                                        */
-/* ================================================================== */
-const TYPING_TIMEOUT = 12000; // o Discord reenvia o sinal a cada ~10s; sem sinal novo em 12s = parou
+const TYPING_TIMEOUT = 12000;
 const DISCORD_SOUNDS = ["message1", "message2", "message3", "mention1", "mention2", "mention3", "ddm", "user_join", "user_leave", "ptt_start", "ptt_stop", "stream_started", "activity_launch", "reconnect", "mute", "unmute"];
 const DEFAULTS = {
-  // monitoramento
+
   trackGroupDMs: true,
   trackUnknownChannels: true,
   recordPresence: true,
@@ -88,24 +88,24 @@ const DEFAULTS = {
   minDuration: 0,
   sentLaterWindow: 10,
   maxEntries: 2000,
-  // barra de servidores
+
   showGuildBarAvatar: true,
   hideWhenChannelOpen: true,
   spinnerType: SPINNER_TYPES.includes("PULSING_ELLIPSIS") ? "PULSING_ELLIPSIS" : (SPINNER_TYPES[0] || ""),
-  // avisos: começou a digitar
+
   startToast: false,
   startDesktop: false,
   startSound: false,
-  // avisos: desistiu
+
   notifyToast: false,
   notifyDesktop: false,
   notifySound: false,
   notifyEachAttempt: false,
-  // som
+
   soundSource: "beep",
   discordSound: "message1",
   soundVolume: 40,
-  // VIP
+
   vipTrackServers: true,
   vipRecordMessages: true,
   vipToast: true,
@@ -115,16 +115,16 @@ const DEFAULTS = {
   vipRecordDMs: true,
   vipTrackVoice: true,
   vipSubscribeTyping: true,
-  // calls e histórico de apagadas/editadas (VIP)
+
   trackMyCalls: true,
   showSnipeButton: true,
-  lurkIcon: "ghost", // ghost | ninja | eye
-  // primeiro contato
+  lurkIcon: "ghost",
+
   firstContactTrack: true,
   firstToast: false,
   firstDesktop: false,
   firstSound: false,
-  // menções
+
   mentionGhost: true,
   mentionReply: true,
   mentionReaction: true,
@@ -136,26 +136,26 @@ const DEFAULTS = {
   keywordToast: false,
   keywordDesktop: false,
   keywordSound: false,
-  // modo foco (opcional)
+
   focusMode: false,
   focusOnDnd: true,
   focusWhilePlaying: true,
-  // backup
+
   backupEnabled: true,
   backupDays: 7,
   backupKeep: 3,
-  // pedidos de amizade
+
   friendReqTrack: true,
   friendReqToast: false,
   friendReqDesktop: false,
   friendReqSound: false,
-  // interruptor geral: desligado = o Lurk não mostra nenhum toast (só erros)
+
   toastsEnabled: true,
-  // idioma: auto = segue o Discord (pt-BR → português, qualquer outro → inglês)
+
   language: "auto",
-  // atualizações
-  changelogMode: "ask", // ask | always | never
-  // botão
+
+  changelogMode: "ask",
+
   showToolbarButton: true,
   showBadge: true,
 };
@@ -167,9 +167,6 @@ const setSetting = (id, value) => {
   settingsBus.emit();
 };
 
-/* ================================================================== */
-/* Idioma                                                               */
-/* ================================================================== */
 const LocaleStore = store("LocaleStore");
 function lang() {
   const pref = getSettings().language;
@@ -177,20 +174,16 @@ function lang() {
   const loc = safe(() => LocaleStore?.locale) || safe(() => document.documentElement.lang) || "en";
   return /^pt/i.test(loc) ? "pt" : "en";
 }
-// L("texto em português", "text in English")
+
 const L = (pt, en) => (lang() === "pt" ? pt : en);
 const plural = (n, one, many) => (n === 1 ? one : many);
 const dateLocale = () => L("pt-BR", "en-US");
 
-// Todo toast do Lurk passa por aqui; respeita o interruptor geral (erros sempre aparecem)
 function toast(text, opts = {}) {
   if (opts.type !== "error" && !getSettings().toastsEnabled) return;
   try { UI.showToast(text, opts); } catch {}
 }
 
-/* ================================================================== */
-/* Atualização automática                                               */
-/* ================================================================== */
 const cmpVer = (a, b) => {
   const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d > 0 ? 1 : -1; }
@@ -204,6 +197,20 @@ async function fetchText(url) {
   if (!res.ok && res.status) throw new Error(`HTTP ${res.status}`);
   return await res.text();
 }
+const b64bytes = (t) => Uint8Array.from(atob(String(t).trim()), (c) => c.charCodeAt(0));
+async function verifySignature(code, sigText) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle || !sigText) return false;
+  const sig = b64bytes(sigText);
+  const data = new TextEncoder().encode(code);
+  for (const k of UPDATE_KEYS) {
+    try {
+      const key = await subtle.importKey("spki", b64bytes(k), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+      if (await subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, sig, data)) return true;
+    } catch {}
+  }
+  return false;
+}
 function pluginFilePath() {
   const path = require("path");
   const file = safe(() => BdApi.Plugins.get(PLUGIN)?.filename) || "Lurk.plugin.js";
@@ -214,20 +221,20 @@ function installUpdate(code) {
     try { require("fs").writeFile(pluginFilePath(), code, (err) => (err ? reject(err) : resolve())); } catch (e) { reject(e); }
   });
 }
-// manual = clicou em "Procurar atualização"
+
 async function checkForUpdate(manual = false) {
   if (updater.checking) return;
   updater.checking = true; updater.error = null; updateBus.emit();
   try {
     const code = await fetchText(`${UPDATE_URL}?t=${Date.now()}`);
     const remote = code.match(/@version\s+([\d.]+)/)?.[1];
-    // só aceita um arquivo que seja mesmo o Lurk
     if (!remote || !/@name\s+Lurk\b/.test(code) || !code.includes("module.exports") || code.length < 20000) throw new Error(L("arquivo inválido no GitHub", "invalid file on GitHub"));
     updater.latest = remote;
     updater.lastCheck = Date.now();
     if (cmpVer(remote, VERSION) <= 0) { if (manual) toast(L(`O Lurk ${VERSION} é a versão mais recente.`, `Lurk ${VERSION} is up to date.`), { type: "success" }); return; }
-    // sempre instala: correções de segurança precisam chegar a todo mundo
-    await installUpdate(code); // o BetterDiscord recarrega o plugin sozinho
+    const sigText = await fetchText(`${UPDATE_URL}.sig?t=${Date.now()}`);
+    if (!(await verifySignature(code, sigText))) throw new Error(L("assinatura da atualização inválida, nada foi instalado", "update signature is invalid, nothing was installed"));
+    await installUpdate(code);
     if (manual) toast(L(`Atualizando para o Lurk ${remote}…`, `Updating to Lurk ${remote}…`), { type: "success" });
   } catch (e) {
     updater.error = String(e?.message || e);
@@ -250,7 +257,7 @@ function showChangelog(from) {
   UI.showConfirmationModal(`Lurk ${VERSION}`, h("div", { className: "dmtt-changelog" }, groups.map((g) => h("div", { key: g.t },
     h("h3", null, TITLES[g.t]), h("ul", null, g.items.map((x, i) => h("li", { key: i }, x)))))), { confirmText: "OK", cancelText: null });
 }
-// roda no start: descobre se acabou de atualizar
+
 function afterUpdateCheck() {
   const last = Data.load("lastVersion");
   Data.save("lastVersion", VERSION);
@@ -264,9 +271,6 @@ function afterUpdateCheck() {
   if (!close) toast(L(`Lurk atualizado para ${VERSION}`, `Lurk updated to ${VERSION}`), { type: "success" });
 }
 
-/* ================================================================== */
-/* Eventos para o React                                                 */
-/* ================================================================== */
 function createBus() {
   const listeners = new Set();
   return {
@@ -290,13 +294,9 @@ function useTicker(ms) {
   React.useEffect(() => { const t = setInterval(force, ms); return () => clearInterval(t); }, []);
 }
 
-/* ================================================================== */
-/* Dados persistidos (por conta do Discord)                             */
-/* ================================================================== */
 const myId = () => UserStore?.getCurrentUser?.()?.id || "unknown";
 const k = (name) => `${name}_${myId()}`;
 
-/* ---------- histórico de digitação ---------- */
 const attemptOf = (r) => ({ startedAt: r.startedAt, lastTypingAt: r.lastTypingAt, signals: r.signals || 1, presence: r.presence || null, presenceEnd: null });
 
 function migrate(list) {
@@ -344,7 +344,6 @@ const trim = (list) => list.slice(0, Math.max(50, Number(getSettings().maxEntrie
 function updateRecord(id, patch) { saveHistory(getHistory().map((r) => (r.id === id ? { ...r, ...patch } : r))); }
 function deleteRecords(predicate) { saveHistory(getHistory().filter((r) => !predicate(r))); }
 
-/* ---------- ignorados ---------- */
 const getIgnored = () => Data.load(k("ignored")) || { users: {}, channels: {} };
 const isIgnoredUser = (id) => !!getIgnored().users[id];
 const isIgnoredChannel = (id) => !!getIgnored().channels[id];
@@ -364,7 +363,6 @@ function toggleIgnore(type, id, label) {
 const getSeenAt = () => Data.load(k("seenAt")) || 0;
 const markSeen = () => { Data.save(k("seenAt"), Date.now()); updateBadge(); };
 
-/* ---------- lista VIP ---------- */
 const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true };
 const getVipList = () => Data.load(k("vip")) || {};
 const isVip = (id) => !!getVipList()[id];
@@ -392,8 +390,6 @@ function toggleVip(id, label) {
   }
 }
 
-// Eventos e mensagens dos VIPs ficam num arquivo separado (DMTypingTrackerVIP.config.json),
-// pra não reescrever o histórico inteiro a cada mensagem.
 const VIP_FILE = "LurkVIP";
 const vipData = { owner: null, events: [], messages: [], voice: [], timer: null, dirty: false };
 function loadVip() {
@@ -435,13 +431,11 @@ function deleteVipData(userId) {
   saveVipSoon();
 }
 
-/* ---------- pedidos de amizade ---------- */
 const getPendingReqs = () => Data.load(k("reqPending")) || {};
 const savePendingReqs = (o) => Data.save(k("reqPending"), o);
 const getCanceledReqs = () => (Data.load(k("reqCanceled")) || []).filter((r) => r?.userId && r?.at);
 function saveCanceledReqs(list) { Data.save(k("reqCanceled"), list.slice(0, 2000)); reqBus.emit(); updateBadge(); }
 
-/* ---------- menções (arquivo separado) ---------- */
 const MENTION_FILE = "LurkMentions";
 const mentionData = { owner: null, events: [], timer: null, dirty: false };
 function loadMentions() {
@@ -475,7 +469,6 @@ function deleteMentionEvents(pred) {
   saveMentionsSoon();
 }
 
-/* ---------- migração do nome antigo (DMTypingTracker → Lurk) ---------- */
 function migrateLegacy() {
   const me = myId();
   if (me === "unknown" || Data.load(`migrated_${me}`)) return false;
@@ -494,7 +487,6 @@ function migrateLegacy() {
   return moved > 0;
 }
 
-/* ---------- adicionar VIP pelo ID ---------- */
 async function addVipById(input) {
   const id = String(input || "").match(/\d{17,20}/)?.[0];
   if (!id) return { ok: false, msg: L("Isso não parece um ID do Discord (17 a 20 números).", "That doesn't look like a Discord ID (17–20 digits).") };
@@ -509,9 +501,6 @@ async function addVipById(input) {
   return { ok: true, id, name };
 }
 
-/* ================================================================== */
-/* Diagnóstico                                                          */
-/* ================================================================== */
 const diag = { version: VERSION, guildBar: null, toolbar: null, openDM: null, typingEvents: [] };
 let diagTimer = null;
 function saveDiag() {
@@ -527,9 +516,6 @@ function outline(el, depth = 0) {
   return o;
 }
 
-/* ================================================================== */
-/* Helpers                                                              */
-/* ================================================================== */
 function defaultAvatar(user, id) {
   let idx = 0;
   try {
@@ -555,11 +541,6 @@ function channelLabel(ch) {
 }
 const isFriendOf = (id) => safe(() => (RelationshipStore ? !!RelationshipStore.isFriend(id) : null));
 
-/*
- * Abrir DM. Bug da v1.2: openPrivateChannel(userId) com o formato novo do Discord
- * criava um grupo vazio. Agora: usa a DM existente pelo usuário ou o ID do canal
- * que veio no sinal de digitação; openPrivateChannel só no formato { recipientIds }.
- */
 function openDM(channelId, userId, isGroup) {
   try {
     if (!isGroup && userId) {
@@ -641,8 +622,6 @@ function groupByDay(items, getTime) {
   return days;
 }
 
-/* ---------- presença ---------- */
-// rótulos traduzidos na hora (Proxy: STATUS_PT.online etc.)
 const labelMap = (pt, en) => new Proxy({}, { get: (_, key) => (lang() === "pt" ? pt : en)[key] });
 const STATUS_PT = labelMap(
   { online: "Online", idle: "Ausente", dnd: "Não perturbar", offline: "Offline", invisible: "Invisível", streaming: "Transmitindo", unknown: "Sem status" },
@@ -659,8 +638,7 @@ function rawPresence(userId) {
   } catch { return null; }
 }
 const presenceOf = (userId) => (getSettings().recordPresence ? rawPresence(userId) : null);
-// O Discord sempre manda o status dos AMIGOS. Amigo digitando/enviando e aparecendo
-// offline = conectado e invisível, com certeza. Para quem não é amigo não há status.
+
 function effectiveStatus(p, isFriend) {
   if (!p?.status) return null;
   if (p.status !== "offline") return p.status;
@@ -678,7 +656,6 @@ const fmtDevices = (devices) => (devices || []).map((d) => DEVICE_PT[d] || d).jo
 const lastPresence = (r) => { const a = attemptsOf(r); const x = a[a.length - 1]; return x?.presenceEnd || x?.presence || null; };
 const recordInvisible = (r) => attemptsOf(r).some((a) => effectiveStatus(a.presence, r.isFriend) === "invisible" || effectiveStatus(a.presenceEnd, r.isFriend) === "invisible");
 
-/* ---------- som ---------- */
 const SOUND_FILE = "LurkSound";
 const getCustomSound = () => safe(() => RawData.load(SOUND_FILE, "file"));
 function playBeep(volume) {
@@ -734,14 +711,13 @@ function playSound() {
   playBeep(vol);
 }
 
-/* ---------- avisos ---------- */
 function isPlaying() {
   try {
     if (RunningGameStore?.getVisibleGame?.() || RunningGameStore?.getRunningGames?.()?.length) return true;
     return (PresenceStore?.getActivities?.(myId()) || []).some((a) => a?.type === 0);
   } catch { return false; }
 }
-// Modo foco (opcional): silencia os avisos, mas continua registrando tudo
+
 function focusActive() {
   const s = getSettings();
   if (!s.focusMode) return false;
@@ -795,11 +771,8 @@ function typingCsv(rows) {
     ]));
 }
 
-/* ================================================================== */
-/* Rastreamento de digitação                                            */
-/* ================================================================== */
-const sessions = new Map();    // "canal:usuario" -> digitando agora
-const pendingSent = new Map(); // "canal:usuario" -> janela do "enviou depois"
+const sessions = new Map();
+const pendingSent = new Map();
 const invisibleThrottle = new Map();
 
 function classify(channelId, userId) {
@@ -817,7 +790,6 @@ function guildInfo(ch) {
   return { guildId: ch?.guild_id || null, guildName: safe(() => GuildStore?.getGuild?.(ch?.guild_id)?.name) || null, channelName: ch?.name || null };
 }
 
-// VIP amigo agindo enquanto aparece offline = pego invisível
 function checkInvisible(userId, via, where) {
   if (!isVip(userId) || !isFriendOf(userId)) return;
   const p = rawPresence(userId);
@@ -903,7 +875,7 @@ function onMessageCreate(action) {
     const channelId = action.channelId || msg.channel_id;
     const userId = msg.author.id;
     const key = `${channelId}:${userId}`;
-    if (sessions.has(key)) endSession(key, false); // enviou: descarta
+    if (sessions.has(key)) endSession(key, false);
     else {
       const pend = pendingSent.get(key);
       if (pend) {
@@ -918,7 +890,7 @@ function onMessageCreate(action) {
       if (!gid && ch?.type === 1) (ch.recipients || []).forEach(rememberContact);
       return;
     }
-    if (!gid && (!ch || ch.type === 1)) rememberContact(userId); // mandou mensagem: já não é "primeiro contato"
+    if (!gid && (!ch || ch.type === 1)) rememberContact(userId);
     if (isVip(userId)) {
       const s = getSettings();
       if (s.vipRecordMessages && (gid || s.vipRecordDMs)) recordVipMessage(msg, channelId, gid, ch);
@@ -976,11 +948,8 @@ function markDeleted(ids) {
 const onMessageDelete = (a) => { try { if (a?.id) { markDeleted([a.id]); handleMentionDelete([a.id]); } } catch (e) { Logger.error("MESSAGE_DELETE", e); } };
 const onMessageDeleteBulk = (a) => { try { if (a?.ids?.length) { markDeleted(a.ids); handleMentionDelete(a.ids); } } catch (e) { Logger.error("MESSAGE_DELETE_BULK", e); } };
 
-/* ================================================================== */
-/* Menções: ghost ping, resposta apagada, palavras-chave, reações       */
-/* ================================================================== */
-const mentionCache = new Map();  // id da mensagem -> snapshot (mensagens que te mencionam/respondem)
-const reactionCache = new Map(); // "msg:usuario:emoji" -> quando reagiu
+const mentionCache = new Map();
+const reactionCache = new Map();
 const CACHE_TTL = 24 * 3600000;
 
 function placeOf(guildId, channelId) {
@@ -1110,10 +1079,7 @@ function onReactionRemove(a) {
   } catch (e) { Logger.error("REACTION_REMOVE", e); }
 }
 
-/* ================================================================== */
-/* Voz dos VIPs                                                         */
-/* ================================================================== */
-const vipVoice = new Map(); // userId -> sessão aberta
+const vipVoice = new Map();
 function usersInChannel(channelId) {
   const st = safe(() => VoiceStateStore?.getVoiceStatesForChannel?.(channelId)) || {};
   const vals = st instanceof Map ? [...st.values()] : Object.values(st);
@@ -1159,7 +1125,7 @@ function initVoice() {
   vipVoice.clear();
   for (const id of Object.keys(getVipList())) initVoiceFor(id);
 }
-// O Discord às vezes manda os campos em camelCase, às vezes em snake_case
+
 function normVS(vs) {
   if (!vs) return null;
   const pick = (a, b) => (vs[a] !== undefined ? vs[a] : vs[b]);
@@ -1172,7 +1138,7 @@ function normVS(vs) {
     selfStream: !!pick("selfStream", "self_stream"), selfVideo: !!pick("selfVideo", "self_video"),
   };
 }
-// junta o que veio no evento com o que o store de voz já tem (o store é a fonte mais confiável)
+
 function mergedVS(raw) {
   const n = normVS(raw);
   if (!n?.userId) return n;
@@ -1185,7 +1151,7 @@ function mergedVS(raw) {
 function onVoiceStates(action) {
   if (!diag.voiceSample && action?.voiceStates?.[0]) { diag.voiceSample = Object.keys(action.voiceStates[0]); saveDiag(); }
   const list = action?.voiceStates || [];
-  setTimeout(() => { processVoiceStates(list); safe(() => processMyCall(list)); }, 0); // deixa o store de voz atualizar primeiro
+  setTimeout(() => { processVoiceStates(list); safe(() => processMyCall(list)); }, 0);
 }
 function processVoiceStates(list) {
   try {
@@ -1244,12 +1210,6 @@ function applyVoiceFlags(sess, vs) {
   sess.video ||= sess.now.video;
 }
 
-/* ================================================================== */
-/* Digitação dos VIPs em servidores em comum                            */
-/* ================================================================== */
-// O Discord só manda "fulano está digitando" dos servidores que o cliente está acompanhando
-// (os que você abriu). Aqui o plugin faz o mesmo pedido que o Discord faz ao abrir um
-// servidor (gateway op 37, { typing: true }), só para os servidores em comum com seus VIPs.
 const profileFetchedAt = new Map();
 function ensureProfile(uid) {
   if (!ProfileActions) return;
@@ -1287,12 +1247,9 @@ function subscribeVipGuilds() {
 }
 function scheduleSubscribe() {
   setTimeout(subscribeVipGuilds, 1500);
-  setTimeout(subscribeVipGuilds, 8000); // depois que o perfil (servidores em comum) carregar
+  setTimeout(subscribeVipGuilds, 8000);
 }
 
-/* ================================================================== */
-/* Backup                                                               */
-/* ================================================================== */
 const BACKUP_FILE = "LurkBackup";
 const getBackups = () => safe(() => RawData.load(BACKUP_FILE, `list_${myId()}`)) || [];
 function collectBackup() {
@@ -1320,7 +1277,7 @@ function runBackup(force) {
 }
 function restoreBackup(b) {
   if (!b?.data || (b.format !== "Lurk-backup" && b.format !== "DMTypingTracker-backup")) throw new Error(L("Esse arquivo não é um backup do Lurk.", "This file isn't a Lurk backup."));
-  runBackup(true); // cópia de segurança do estado atual antes de restaurar
+  runBackup(true);
   const D = b.data, me = myId();
   if (D.settings) Data.save("settings", D.settings);
   Data.save(k("history"), D.history || []);
@@ -1409,9 +1366,6 @@ function endSession(key, register) {
   }
 }
 
-/* ================================================================== */
-/* Presença dos VIPs (linha do tempo online/offline)                    */
-/* ================================================================== */
 const presenceCache = new Map();
 function initPresenceCache() {
   presenceCache.clear();
@@ -1439,12 +1393,9 @@ function onPresenceChange() {
   } catch (e) { Logger.error("presence", e); }
 }
 
-/* ================================================================== */
-/* Pedidos de amizade cancelados                                         */
-/* ================================================================== */
 const REL_PENDING_INCOMING = 3;
 const REL_FRIEND = 1;
-const declinedByMe = new Map(); // ids que você recusou/cancelou (pra não confundir com "a pessoa cancelou")
+const declinedByMe = new Map();
 
 function relEntries() {
   const raw = safe(() => RelationshipStore?.getMutableRelationships?.()) || safe(() => RelationshipStore?.getRelationships?.()) || {};
@@ -1474,7 +1425,7 @@ function initPendingReqs() {
       pending[id] = { ...snapshotUser(id), at: since };
     }
   }
-  // pedidos que sumiram enquanto o plugin estava desligado (sem aceitar)
+
   const canceled = getCanceledReqs();
   let changed = false;
   for (const id of Object.keys(pending)) {
@@ -1498,7 +1449,7 @@ function onRelationshipAdd(action) {
       pending[rel.id] = { ...snapshotUser(rel.id, rel.user), at: Date.parse(rel.since || "") || Date.now() };
       savePendingReqs(pending);
     } else if (pending[rel.id]) {
-      delete pending[rel.id]; // aceito ou bloqueado
+      delete pending[rel.id];
       savePendingReqs(pending);
     }
   } catch (e) { Logger.error("RELATIONSHIP_ADD", e); }
@@ -1514,7 +1465,7 @@ function onRelationshipRemove(action) {
     delete pending[id];
     savePendingReqs(pending);
     const mine = declinedByMe.get(id);
-    if (mine && Date.now() - mine < 30000) return; // foi você que recusou
+    if (mine && Date.now() - mine < 30000) return;
     const entry = { ...req, ...snapshotUser(id), at: req.at, canceledAt: Date.now() };
     saveCanceledReqs([entry, ...getCanceledReqs()]);
     const s = getSettings();
@@ -1537,9 +1488,6 @@ function patchRelationshipActions() {
   }
 }
 
-/* ================================================================== */
-/* Tempo em call com cada pessoa (as SUAS calls)                        */
-/* ================================================================== */
 const CALL_FILE = "LurkCalls";
 const callData = { owner: null, sessions: [], timer: null, dirty: false };
 const callBus = createBus();
@@ -1615,7 +1563,7 @@ function initMyCall() {
   const vs = normVS(safe(() => VoiceStateStore?.getVoiceStateForUser?.(myId())));
   if (vs?.channelId) startMyCall(vs, true);
 }
-// soma por pessoa (inclui a call atual)
+
 function callTotals() {
   const map = new Map();
   const add = (p, at, ms, place) => {
@@ -1634,10 +1582,6 @@ function callTotals() {
   return [...map.values()].sort((a, b) => b.ms - a.ms);
 }
 
-/* ================================================================== */
-/* Apagadas e editadas: feed permanente dos VIPs                        */
-/* ================================================================== */
-// Usa as mensagens que o Lurk já registra dos VIPs (servidores + privado).
 const snipeBus = vipBus;
 const getDeletedSeen = () => Data.load(k("deletedSeen")) || 0;
 function markDeletedSeen() { Data.save(k("deletedSeen"), Date.now()); updateSnipeBadge(); }
@@ -1645,8 +1589,7 @@ const lastChangeAt = (m) => Math.max(m.deletedAt || 0, m.edits?.length ? m.edits
 const vipChanges = () => loadVip().messages.filter((m) => isVip(m.userId) && (m.deletedAt || m.edits?.length)).sort((a, b) => lastChangeAt(b) - lastChangeAt(a));
 const newChangesCount = () => { const seen = getDeletedSeen(); return vipChanges().filter((m) => lastChangeAt(m) > seen).length; };
 const snipeCountFor = (channelId) => (channelId ? vipChanges().filter((m) => m.channelId === channelId).length : 0);
-// Interceptor: roda ANTES dos stores. Se um VIP apaga/edita uma mensagem que já estava
-// carregada antes de o Lurk começar a registrar, salva a versão original a tempo.
+
 let snipeActive = false;
 function snipeInterceptor(action) {
   try {
@@ -1668,9 +1611,6 @@ function snipeInterceptor(action) {
   return false;
 }
 
-/* ================================================================== */
-/* Primeiro contato                                                     */
-/* ================================================================== */
 const knownContacts = new Set();
 const firstThrottle = new Map();
 const getFirstContacts = () => (Data.load(k("firstContacts")) || []).filter((e) => e.via !== "message");
@@ -1691,8 +1631,7 @@ function rememberContact(id) {
   saved.push(id);
   Data.save(k("knownContacts"), saved.slice(-5000));
 }
-// Primeiro contato: alguém que nunca falou com você digitou e PAROU sem enviar.
-// (Quem manda a mensagem é descartado — evita spam de bots.)
+
 function checkFirstContact(sess) {
   const s = getSettings();
   const { userId, channelId } = sess;
@@ -1711,9 +1650,6 @@ function checkFirstContact(sess) {
   });
 }
 
-/* ================================================================== */
-/* Barra de servidores: foto + indicador (injeção via DOM)              */
-/* ================================================================== */
 const gb = { container: null, root: null, itemClass: "", size: 40, logged: false };
 
 function findHomeItem() {
@@ -1822,7 +1758,7 @@ function GuildBarTyping() {
   const selected = useSelectedChannelId();
   const s = getSettings();
   const list = [...sessions.values()]
-    .filter((x) => x.kind !== "guild") // a barra é só para o privado
+    .filter((x) => x.kind !== "guild")
     .filter((x) => !(s.hideWhenChannelOpen && x.channelId === selected))
     .sort((a, b) => b.startedAt - a.startedAt);
   if (gb.container) gb.container.classList.toggle("dmtt-empty-bar", !list.length);
@@ -1830,9 +1766,6 @@ function GuildBarTyping() {
   return h(React.Fragment, null, list.map((x) => h(TypingAvatar, { key: x.key, session: x, spinnerType: s.spinnerType })));
 }
 
-/* ================================================================== */
-/* UI: ícones e peças básicas                                           */
-/* ================================================================== */
 function Icon({ d, size = 16 }) {
   return h("svg", { width: size, height: size, viewBox: "0 0 24 24", "aria-hidden": true }, h("path", { fill: "currentColor", d }));
 }
@@ -1843,10 +1776,10 @@ const ICON_CHEVRON = "M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 1 
 const ICON_BACK = "M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.4 0Z";
 const ICON_X = "M17.3 18.7a1 1 0 0 0 1.4-1.4L13.42 12l5.3-5.3a1 1 0 0 0-1.42-1.4L12 10.58l-5.3-5.3a1 1 0 0 0-1.4 1.42L10.58 12l-5.3 5.3a1 1 0 1 0 1.42 1.4L12 13.42l5.3 5.3Z";
 const ICON_CHECK = "M20.7 6.3a1 1 0 0 1 0 1.4l-10 10a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4l4.3 4.29 9.3-9.3a1 1 0 0 1 1.4 0Z";
-// estrela cheia (reserva)
+
 const ICON_STAR_FILL = "M10.81 2.86c.38-1.15 2-1.15 2.38 0l1.89 5.83h6.12c1.2 0 1.71 1.54.73 2.25l-4.95 3.6 1.9 5.82c.37 1.15-.94 2.1-1.93 1.4L12 18.16l-4.95 3.6c-.98.7-2.3-.25-1.92-1.4l1.89-5.82-4.95-3.6c-.98-.71-.48-2.25.73-2.25h6.12l1.9-5.83Z";
 const ICON_KEYBOARD = "M20 5a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM6 13a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V14a1 1 0 0 0-1-1m12 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V14a1 1 0 0 0-1-1m-7.998 0a1 1 0 0 0-.004 2l4 .01a1 1 0 0 0 .005-2zM6 9a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1m4 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1m4 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1m4 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1";
-// ícones de traço (estilo SF Symbols)
+
 const SI = {
   keyboard: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8",
   at: "M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-3.5 7.1",
@@ -1876,7 +1809,6 @@ function IconTile({ name, color, size = 28 }) {
   return h("span", { className: "dmtt-tile", style: { background: color, width: size, height: size } }, h(SIcon, { d: SI[name] || SI.gear, size: Math.round(size * 0.6), sw: 2.2 }));
 }
 
-// Ícones de dispositivo
 const DEVICE_ICON = {
   desktop: "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 21h8M12 17v4",
   mobile: "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM11 18h2",
@@ -1927,7 +1859,6 @@ const Empty = ({ icon, title, children }) => h("div", { className: "dmtt-empty" 
   title ? h("div", { className: "dmtt-empty-title" }, title) : null,
   children ? h("div", null, children) : null);
 
-/* ---------- listas agrupadas (inset grouped) ---------- */
 function Group({ header, footer, children, flush }) {
   const kids = React.Children.toArray(children).filter(Boolean);
   if (!kids.length) return null;
@@ -2003,12 +1934,9 @@ function DayList({ items, getTime, render }) {
 const confirmDanger = (title, text, onConfirm, confirmText) =>
   UI.showConfirmationModal(title, text, { danger: true, confirmText: confirmText || L("Apagar", "Delete"), cancelText: L("Cancelar", "Cancel"), onConfirm });
 
-/* ================================================================== */
-/* UI: navegação em pilha (estilo iOS)                                  */
-/* ================================================================== */
 const NavCtx = React.createContext(null);
 const useNav = () => React.useContext(NavCtx);
-// nomes das seções (PT / EN) — um lugar só para manter consistente
+
 const NAMES = {
   home: () => L("Hoje", "Today"),
   typing: () => L("Digitou e apagou", "Typed & quit"),
@@ -2029,12 +1957,11 @@ function screenTitle(s) {
   }
 }
 function App({ initial }) {
-  useBus(settingsBus); // troca de idioma re-renderiza tudo
+  useBus(settingsBus);
   const [stack, setStack] = React.useState(() => (initial?.length ? initial : [{ type: "home" }]));
   const bodyRef = React.useRef(null);
   const appRef = React.useRef(null);
-  // O modal do Discord/BD tem a própria rolagem; desliga a dele e ajusta a altura do app
-  // para caber, deixando só a rolagem interna (e o cabeçalho fixo).
+
   React.useLayoutEffect(() => {
     const el = appRef.current;
     if (!el) return;
@@ -2100,9 +2027,6 @@ function ScreenRouter({ s }) {
   }
 }
 
-/* ================================================================== */
-/* Tela: Hoje                                                           */
-/* ================================================================== */
 let lastSeenBeforeOpen = 0;
 function counts() {
   const seen = lastSeenBeforeOpen;
@@ -2159,9 +2083,6 @@ function HomeScreen() {
     h("div", { className: "dmtt-version" }, `Lurk ${VERSION}`));
 }
 
-/* ================================================================== */
-/* Tela: Digitou e apagou                                               */
-/* ================================================================== */
 const attemptsText = (n) => L(`${n} ${plural(n, "tentativa", "tentativas")}`, `${n} ${plural(n, "attempt", "attempts")}`);
 function PersonRow({ rows, onOpen }) {
   const latest = rows[0];
@@ -2279,9 +2200,6 @@ function PersonScreen({ userId, channelId }) {
     h(Group, null, h(NavRow, { title: L("Apagar histórico desta pessoa", "Delete this person's history"), danger: true, onClick: () => confirmDanger(L("Apagar histórico", "Delete history"), L(`Apagar o histórico de ${displayName(latest)}?`, `Delete ${displayName(latest)}'s history?`), () => { deleteRecords((x) => x.userId === userId && (!channelId || x.channelId === channelId)); nav.pop(); }) })));
 }
 
-/* ================================================================== */
-/* Tela: Menções                                                        */
-/* ================================================================== */
 function EmojiView({ e }) {
   if (!e) return null;
   if (e.id) return h("img", { className: "dmtt-emoji", src: `https://cdn.discordapp.com/emojis/${e.id}.${e.animated ? "gif" : "webp"}?size=32`, alt: e.name || "", title: `:${e.name}:` });
@@ -2345,9 +2263,6 @@ function MentionsScreen({ initial = "all" }) {
     list.length ? h(Group, null, h(NavRow, { title: seg === "all" ? L("Apagar todas as menções", "Delete all mentions") : L(`Apagar "${MENTION_LABEL[seg]}"`, `Delete "${MENTION_LABEL[seg]}"`), danger: true, onClick: () => confirmDanger(L("Apagar", "Delete"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => deleteMentionEvents((e) => seg === "all" || e.type === seg)) })) : null);
 }
 
-/* ================================================================== */
-/* Tela: Novos contatos (digitou pela 1ª vez + pedidos cancelados)      */
-/* ================================================================== */
 function ContactsScreen({ initial = "first" }) {
   useBus(reqBus);
   const [seg, setSeg] = React.useState(initial);
@@ -2386,10 +2301,6 @@ function ContactsScreen({ initial = "first" }) {
       h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : saveCanceledReqs([]))) })) : null);
 }
 
-/* ================================================================== */
-/* Tela: Apagadas e editadas (snipe)                                    */
-/* ================================================================== */
-// Histórico VIP (botão do relógio): mensagens apagadas/editadas, status e pessoas
 function SnipeScreen({ channelId, tab: initialTab }) {
   useBus(vipBus, settingsBus);
   const nav = useNav();
@@ -2407,14 +2318,13 @@ function SnipeScreen({ channelId, tab: initialTab }) {
     tab === "messages" ? h(MessagesFeed, { channelId }) : tab === "status" ? h(StatusFeed) : h(VipPeopleList));
 }
 
-// tempo online (não-offline) de um VIP desde "from", a partir dos eventos de status
 function onlineMs(id, events, from) {
   const pres = events.filter((e) => e.userId === id && e.type === "presence").sort((a, b) => a.at - b.at);
   let total = 0;
   let state = null; let since = from;
   const before = pres.filter((e) => e.at < from);
   if (before.length) state = before[before.length - 1].to;
-  // sem nenhuma mudança registrada antes: usa o status atual desde quando entrou na Lista VIP
+
   if (!state && !pres.some((e) => e.at >= from)) {
     const added = getVipList()[id]?.addedAt || 0;
     const cur = rawPresence(id)?.status;
@@ -2559,9 +2469,6 @@ function ChangeCard({ m, isNew, showPlace }) {
   });
 }
 
-/* ================================================================== */
-/* Tela: Lista VIP                                                      */
-/* ================================================================== */
 function vipStatusNow(id) {
   const p = rawPresence(id);
   const friend = isFriendOf(id);
@@ -2682,7 +2589,6 @@ function MessageEntry({ m, body, edited }) {
     !m.deletedAt ? h("button", { className: "dmtt-link", onClick: () => jumpTo(m.guildId, m.channelId, m.id) }, L("Ir para mensagem", "Jump to message")) : null);
 }
 
-/* ---------- voz ---------- */
 function PeerStack({ peers, max = 4 }) {
   if (!peers?.length) return null;
   return h("span", { className: "dmtt-peers", title: peers.map((p) => p.name).join(", ") },
@@ -2788,7 +2694,6 @@ function VoiceList({ id, sessions: list }) {
       : !live ? h(Empty, { icon: "headset", title: L("Nenhuma call ainda", "No calls yet") }) : null);
 }
 
-// "Avisar quando" recolhido: uma linha com resumo que expande ao clicar
 function VipAlerts({ id, toggles }) {
   const [open, setOpen] = React.useState(false);
   const on = toggles.filter(([f]) => vipFlag(id, f));
@@ -2833,9 +2738,6 @@ function VipPersonScreen({ userId: id }) {
       : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }));
 }
 
-/* ================================================================== */
-/* Tela: Tempo em call                                                  */
-/* ================================================================== */
 function CallsScreen() {
   useBus(callBus, settingsBus);
   useTicker(30000);
@@ -2886,14 +2788,11 @@ function CallPersonScreen({ userId }) {
     } }) : h(Empty, { icon: "headset", title: L("Sem calls registradas", "No calls recorded") }, myCall.sess?.peers?.[userId] ? L("Vocês estão em call agora. Aparece aqui quando a call terminar.", "You're in a call right now. It shows up here when it ends.") : null));
 }
 
-/* ================================================================== */
-/* Ajustes                                                              */
-/* ================================================================== */
 const sw = (id, label, note) => ({ id, label, note, type: "switch" });
 const num = (id, label, min, max, step, unit, note) => ({ id, label, note, type: "number", min, max, step, unit });
 const channelsRows = (prefix) => [sw(`${prefix}Toast`, L("Aviso no Discord", "In-app notification")), sw(`${prefix}Desktop`, L("Notificação do Windows", "Desktop notification")), sw(`${prefix}Sound`, L("Som", "Sound"))];
 const ALERT_KEYS = ["start", "notify", "mention", "keyword", "vip", "first", "friendReq"];
-// montado na hora para seguir o idioma atual
+
 function settingsPages() {
   return [
     { id: "language", title: L("Idioma", "Language"), icon: "globe", color: "#0a84ff", summary: () => ({ auto: L("Automático", "Automatic"), pt: "Português", en: "English" }[getSettings().language] || L("Automático", "Automatic")),
@@ -3104,9 +3003,6 @@ function IgnoredList() {
     : h(Empty, { icon: "ban", title: L("Ninguém ignorado", "No one ignored") }, L("Clique com o botão direito em uma pessoa ou grupo para ignorar.", "Right-click a person or group to ignore them."));
 }
 
-/* ================================================================== */
-/* Abrir o painel                                                       */
-/* ================================================================== */
 function openApp(stack) {
   lastSeenBeforeOpen = getSeenAt();
   markSeen();
@@ -3120,9 +3016,6 @@ function openHistory(filter = {}) {
 const openVip = (id) => openApp([{ type: "home" }, { type: "vip" }, { type: "vipPerson", userId: id }]);
 const openSnipe = (channelId) => openApp([{ type: "home" }, { type: "snipe", channelId }]);
 
-/* ================================================================== */
-/* Botões no topo (ao lado do RemovedConnectionAlerts)                  */
-/* ================================================================== */
 let toolbarBtn = null;
 let snipeBtn = null;
 let toolbarLang = null;
@@ -3140,8 +3033,7 @@ function makeTopButton(label, iconHTML, onClick) {
 const svgStroke = (d) => `<svg class="dmtt-toolbar-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 function placeToolbarButton() {
   const s = getSettings();
-  // botões recriados se o idioma mudar (tooltip)
-  // botões recriados se o idioma ou o ícone mudar
+
   const key = `${lang()}|${s.lurkIcon}`;
   if (toolbarLang && toolbarLang !== key) { toolbarBtn?.remove(); snipeBtn?.remove(); toolbarBtn = null; snipeBtn = null; }
   toolbarLang = key;
@@ -3186,9 +3078,6 @@ function updateSnipeBadge() {
   badge.textContent = n > 99 ? "99+" : String(n);
 }
 
-/* ================================================================== */
-/* Observador único do DOM                                               */
-/* ================================================================== */
 let domObserver = null;
 let domRaf = 0;
 function syncDOM() {
@@ -3214,11 +3103,7 @@ function stopDOM() {
   unmountGuildBar();
 }
 
-/* ================================================================== */
-/* Estilos                                                              */
-/* ================================================================== */
 const CSS = `
-/* barra de servidores */
 .dmtt-guildbar { display: flex; flex-direction: column; gap: var(--space-xs, 8px); width: 100%; }
 .dmtt-guildbar.dmtt-empty-bar { display: none; }
 .dmtt-li { position: relative; display: flex; justify-content: center; width: 100%; }
@@ -3231,7 +3116,6 @@ const CSS = `
 .dmtt-li:hover .dmtt-pill { height: 20px; margin-top: -10px; }
 @keyframes dmtt-in { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
-/* botões do topo */
 .dmtt-toolbar-btn { position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--interactive-normal, var(--interactive-icon-default)); }
 .dmtt-toolbar-btn:hover { color: var(--interactive-hover, var(--interactive-icon-hover)); }
 .dmtt-toolbar-btn { width: 24px; height: 24px; margin: 0 6px; opacity: .85; transition: opacity .12s, color .12s; }
@@ -3241,7 +3125,6 @@ const CSS = `
 .dmtt-toolbar-badge { position: absolute; top: -4px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #ff3b30; color: #fff; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; pointer-events: none; }
 .dmtt-toolbar-badge[hidden] { display: none; }
 
-/* ---------- app ---------- */
 .dmtt-app {
   --c-text: var(--text-default, var(--text-normal, #dbdee1));
   --c-strong: var(--header-primary, var(--text-strong, #f2f3f5));
@@ -3285,7 +3168,6 @@ const CSS = `
 .dmtt-row2 { display: flex; flex-wrap: wrap; gap: 8px; }
 .dmtt-row2 > .dmtt-seg { flex: 1 1 200px; }
 
-/* listas agrupadas */
 .dmtt-sec { display: flex; flex-direction: column; }
 .dmtt-sec-h { padding: 4px 14px 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--c-muted); }
 .dmtt-sec-f { padding: 6px 14px 0; font-size: 12px; color: var(--c-muted); line-height: 1.4; }
@@ -3329,7 +3211,6 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-flag-streamed { color: #bf5af2; }
 .dmtt-flag-video { color: var(--c-green); }
 
-/* avatar e status */
 .dmtt-av { position: relative; flex: none; }
 .dmtt-av img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
 .dmtt-dot { position: absolute; right: -2px; bottom: -2px; box-sizing: border-box; border-radius: 50%; border: 2.5px solid var(--c-fill); background: #80848e; }
@@ -3346,7 +3227,6 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-live-inline { color: var(--c-green); font-weight: 500; }
 @keyframes dmtt-pulse { 0% { box-shadow: 0 0 0 0 rgba(48,209,88,.6); } 70% { box-shadow: 0 0 0 7px rgba(48,209,88,0); } 100% { box-shadow: 0 0 0 0 rgba(48,209,88,0); } }
 
-/* controles */
 .dmtt-switch { position: relative; width: 44px; height: 26px; flex: none; border: none; border-radius: 13px; background: rgba(120,120,128,.36); cursor: pointer; transition: background .2s; padding: 0; }
 .dmtt-switch.is-on { background: var(--c-green); }
 .dmtt-switch-knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.3); transition: transform .2s cubic-bezier(.3,.7,.4,1); }
@@ -3376,7 +3256,6 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-tag.is-red { background: rgba(255,69,58,.16); color: #ff6961; }
 .dmtt-tag.is-btn { cursor: pointer; }
 
-/* hero e números */
 .dmtt-hero { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 16px 0 4px; text-align: center; }
 .dmtt-hero-name { margin-top: 8px; font-size: 21px; font-weight: 700; color: var(--c-strong); }
 .dmtt-hero-user { font-size: 13px; color: var(--c-muted); }
@@ -3402,7 +3281,6 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-tile-card b { font-size: 26px; font-weight: 700; color: var(--c-strong); font-variant-numeric: tabular-nums; line-height: 1.05; }
 .dmtt-tile-card span:last-child { font-size: 12px; color: var(--c-muted); }
 
-/* cartões de mensagem */
 .dmtt-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; }
 .dmtt-card-head { display: flex; align-items: center; gap: 10px; }
 .dmtt-card-action { font-weight: 400; color: var(--c-muted); font-size: 13px; }
@@ -3415,7 +3293,6 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-kw { color: var(--c-strong); background: rgba(255,159,10,.22); padding: 0 5px; border-radius: 5px; font-weight: 600; }
 .dmtt-emoji { width: 16px; height: 16px; vertical-align: -3px; }
 
-/* expandíveis */
 .dmtt-sub { display: flex; flex-direction: column; gap: 4px; padding: 0 14px 12px 40px; }
 .dmtt-subrow { display: flex; gap: 10px; font-size: 12.5px; }
 .dmtt-subrow-n { width: 22px; font-weight: 600; }
@@ -3457,9 +3334,6 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-version { text-align: center; font-size: 11px; color: var(--c-muted); padding: 8px 0 4px; }
 `;
 
-/* ================================================================== */
-/* Plugin                                                               */
-/* ================================================================== */
 const SUBS = {
   TYPING_START: onTypingStart,
   MESSAGE_CREATE: onMessageCreate,
@@ -3487,10 +3361,10 @@ module.exports = class Lurk {
       toast(L("Lurk: não encontrei o Dispatcher do Discord.", "Lurk: couldn't find Discord's Dispatcher."), { type: "error" });
       return;
     }
-    // dados da versão antiga (DMTypingTracker) são copiados uma vez
+
     if (safe(() => migrateLegacy())) { settingsCache = null; toast(L("Lurk: seus dados do DMTypingTracker foram importados.", "Lurk: your DMTypingTracker data was imported."), { type: "success" }); }
     for (const [ev, fn] of Object.entries(SUBS)) Dispatcher.subscribe(ev, fn);
-    // interceptor do snipe: registrado uma vez só; o hook aponta pra instância atual
+
     window.__dmttSnipeHook = snipeInterceptor;
     snipeActive = true;
     if (!window.__dmttInterceptorAdded && typeof Dispatcher.addInterceptor === "function") {
@@ -3607,4 +3481,3 @@ function pushItems(ret, items) {
   if (Array.isArray(c)) c.push(...items);
   else ret.props.children = [c, ...items];
 }
-
