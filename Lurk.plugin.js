@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.4.0
+ * @version 2.5.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.4.0";
+const VERSION = "2.5.0";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,13 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.5.0", items: [
+    ["new", "Arquivo morto: quando as mensagens dos VIPs passam do limite, as mais antigas vão para a pasta LurkArchives em vez de serem apagadas. Veja em Histórico VIP › Mensagens antigas.", "Archive: when VIP messages go over the limit, the oldest ones move to the LurkArchives folder instead of being deleted. See VIP history › Old messages."],
+    ["new", "Busca nas mensagens dos VIPs, com opção de procurar também no arquivo morto.", "Search VIP messages, with an option to search the archive too."],
+    ["new", "Ajustes › Armazenamento: limites de cada registro em um só lugar.", "Settings › Storage: every log limit in one place."],
+    ["improved", "O Lurk ficou mais leve: mensagens, status e calls dos VIPs agora ficam em arquivos separados, e o limite padrão de mensagens passou para 2000.", "Lurk is lighter: VIP messages, statuses and calls are now saved in separate files, and the default message limit is now 2000."],
+    ["improved", "O tempo total em call com cada pessoa agora é guardado para sempre.", "Your total call time with each person is now kept forever."],
+  ] },
   { version: "2.4.0", items: [
     ["new", "Lista VIP: há quanto tempo a pessoa está offline aparece embaixo do nome dela na lista de mensagens diretas.", "VIP list: how long someone has been offline now shows under their name in your direct messages list."],
     ["new", "Em Ajustes › Lista VIP › Última vez online você também pode mostrar há quanto tempo a pessoa está online, no topo da conversa aberta e na lista de membros dos servidores.", "In Settings › VIP list › Last online you can also show how long someone has been online, at the top of the open conversation and in server member lists."],
@@ -115,7 +122,11 @@ const DEFAULTS = {
   vipToast: true,
   vipDesktop: true,
   vipSound: false,
-  vipMaxMessages: 5000,
+  vipMaxMessages: 2000,
+  vipMaxEvents: 2000,
+  vipMaxVoice: 500,
+  mentionMax: 1000,
+  callMaxSessions: 1000,
   vipRecordDMs: true,
   vipTrackVoice: true,
   vipSubscribeTyping: true,
@@ -227,7 +238,11 @@ function pluginFilePath() {
 }
 function installUpdate(code) {
   return new Promise((resolve, reject) => {
-    try { require("fs").writeFile(pluginFilePath(), code, (err) => (err ? reject(err) : resolve())); } catch (e) { reject(e); }
+    try {
+      const fs = require("fs");
+      if (typeof fs.writeFile === "function") fs.writeFile(pluginFilePath(), code, (err) => (err ? reject(err) : resolve()));
+      else { fs.writeFileSync(pluginFilePath(), code); resolve(); }
+    } catch (e) { reject(e); }
   });
 }
 
@@ -400,28 +415,39 @@ function toggleVip(id, label) {
 }
 
 const VIP_FILE = "LurkVIP";
-const vipData = { owner: null, events: [], messages: [], voice: [], timer: null, dirty: false };
+const VIP_FILES = { events: "LurkVIPStatus", messages: "LurkVIPMessages", voice: "LurkVIPCalls" };
+const VIP_PARTS = ["events", "messages", "voice"];
+const vipData = { owner: null, events: [], messages: [], voice: [], timer: null, dirty: new Set() };
+const limitOf = (id, min) => Math.max(min, Number(getSettings()[id]) || DEFAULTS[id]);
 function loadVip() {
   if (vipData.owner === myId()) return vipData;
   flushVip();
-  vipData.owner = myId();
-  vipData.events = safe(() => RawData.load(VIP_FILE, `events_${myId()}`)) || [];
-  vipData.messages = safe(() => RawData.load(VIP_FILE, `messages_${myId()}`)) || [];
-  vipData.voice = safe(() => RawData.load(VIP_FILE, `voice_${myId()}`)) || [];
+  const me = myId();
+  vipData.owner = me;
+  const migrated = [];
+  for (const part of VIP_PARTS) {
+    let list = safe(() => RawData.load(VIP_FILES[part], `${part}_${me}`));
+    if (!list) {
+      const legacy = safe(() => RawData.load(VIP_FILE, `${part}_${me}`));
+      if (legacy) { list = legacy; vipData.dirty.add(part); migrated.push(part); }
+    }
+    vipData[part] = list || [];
+  }
+  if (migrated.length) {
+    flushVip();
+    for (const part of migrated) if (!vipData.dirty.has(part)) safe(() => RawData.delete(VIP_FILE, `${part}_${me}`));
+  }
   return vipData;
 }
 function flushVip() {
-  if (!vipData.dirty || !vipData.owner) return;
+  if (!vipData.dirty.size || !vipData.owner) return;
   clearTimeout(vipData.timer);
-  try {
-    RawData.save(VIP_FILE, `events_${vipData.owner}`, vipData.events);
-    RawData.save(VIP_FILE, `messages_${vipData.owner}`, vipData.messages);
-    RawData.save(VIP_FILE, `voice_${vipData.owner}`, vipData.voice);
-  } catch (e) { Logger.error("VIP save", e); }
-  vipData.dirty = false;
+  for (const part of [...vipData.dirty]) {
+    try { RawData.save(VIP_FILES[part], `${part}_${vipData.owner}`, vipData[part]); vipData.dirty.delete(part); } catch (e) { Logger.error("VIP save", e); }
+  }
 }
-function saveVipSoon() {
-  vipData.dirty = true;
+function saveVipSoon(...parts) {
+  (parts.length ? parts : VIP_PARTS).forEach((x) => vipData.dirty.add(x));
   clearTimeout(vipData.timer);
   vipData.timer = setTimeout(flushVip, 1500);
   vipBus.emit();
@@ -429,8 +455,8 @@ function saveVipSoon() {
 }
 function addVipEvent(ev) {
   const d = loadVip();
-  d.events = [ev, ...d.events].slice(0, 5000);
-  saveVipSoon();
+  d.events = [ev, ...d.events].slice(0, limitOf("vipMaxEvents", 100));
+  saveVipSoon("events");
 }
 function deleteVipData(userId) {
   const d = loadVip();
@@ -438,6 +464,78 @@ function deleteVipData(userId) {
   d.messages = d.messages.filter((m) => m.userId !== userId);
   d.voice = d.voice.filter((v) => v.userId !== userId);
   saveVipSoon();
+}
+
+const ARCHIVE_DIR = "LurkArchives";
+const archiveBus = createBus();
+const getArchives = () => (Data.load(k("archives")) || []).filter((a) => a?.file);
+function saveArchives(list) { Data.save(k("archives"), list); archiveBus.emit(); }
+const nodeFs = () => require("fs");
+const archiveDir = () => require("path").join(BdApi.Plugins.folder, ARCHIVE_DIR);
+const archivePath = (file) => require("path").join(archiveDir(), file);
+const isoDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+function writeArchive(messages) {
+  const fs = nodeFs();
+  const dir = archiveDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+  const times = messages.map((m) => m.createdAt || 0);
+  const from = Math.min(...times), to = Math.max(...times);
+  const base = `messages_${isoDay(from)}_${isoDay(to)}`;
+  let file = `${base}.json`;
+  for (let i = 2; fs.existsSync(archivePath(file)); i++) file = `${base}_${i}.json`;
+  const text = JSON.stringify({ format: "Lurk-archive", v: 1, plugin: VERSION, account: myId(), from, to, count: messages.length, messages });
+  fs.writeFileSync(archivePath(file), text);
+  saveArchives([{ file, from, to, count: messages.length, bytes: text.length, at: Date.now() }, ...getArchives()]);
+}
+function enforceMessageLimit() {
+  const d = loadVip();
+  const max = limitOf("vipMaxMessages", 200);
+  const half = Math.max(100, Math.floor(max / 2));
+  let changed = false;
+  while (d.messages.length > max) {
+    const cut = d.messages.length - half;
+    const old = d.messages.slice(cut);
+    try { writeArchive(old); } catch (e) { Logger.error("archive", e); break; }
+    d.messages = d.messages.slice(0, cut);
+    changed = true;
+  }
+  if (changed) saveVipSoon("messages");
+}
+function readArchive(entry) {
+  return new Promise((resolve, reject) => {
+    const parse = (text) => { try { resolve(JSON.parse(text).messages || []); } catch (e) { reject(e); } };
+    try {
+      const fs = nodeFs();
+      if (typeof fs.readFile === "function") fs.readFile(archivePath(entry.file), "utf8", (err, text) => (err ? reject(err) : parse(text)));
+      else setTimeout(() => { try { parse(fs.readFileSync(archivePath(entry.file), "utf8")); } catch (e) { reject(e); } }, 0);
+    } catch (e) { reject(e); }
+  });
+}
+function deleteArchive(entry) {
+  try { const f = archivePath(entry.file); if (nodeFs().existsSync(f)) nodeFs().unlinkSync(f); } catch (e) { Logger.error("archive delete", e); }
+  saveArchives(getArchives().filter((a) => a.file !== entry.file));
+}
+const fmtBytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+const archivePeriod = (a) => { const f = (ms) => { const d = new Date(ms); return L(`${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`, `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()}`); }; return isoDay(a.from) === isoDay(a.to) ? f(a.from) : `${f(a.from)} – ${f(a.to)}`; };
+function applyStorageMigration() {
+  if (Data.load(k("storageV2"))) return;
+  const cur = Data.load("settings") || {};
+  Data.save("settings", { ...cur, vipMaxMessages: 2000 });
+  settingsCache = null;
+  Data.save(k("storageV2"), Date.now());
+}
+function enforceLimits() {
+  const d = loadVip();
+  const ev = limitOf("vipMaxEvents", 100), vo = limitOf("vipMaxVoice", 50);
+  if (d.events.length > ev) { d.events = d.events.slice(0, ev); saveVipSoon("events"); }
+  if ((d.voice || []).length > vo) { d.voice = d.voice.slice(0, vo); saveVipSoon("voice"); }
+  enforceMessageLimit();
+  const m = loadMentions(), mm = limitOf("mentionMax", 100);
+  if (m.events.length > mm) { m.events = m.events.slice(0, mm); saveMentionsSoon(); }
+  const c = loadCalls(), cm = limitOf("callMaxSessions", 50);
+  if (c.sessions.length > cm) { c.sessions = c.sessions.slice(0, cm); saveCallsSoon(); }
+  const hist = getHistory();
+  if (hist.length > limitOf("maxEntries", 50)) saveHistory(trim(hist));
 }
 
 const getPendingReqs = () => Data.load(k("reqPending")) || {};
@@ -469,7 +567,7 @@ function saveMentionsSoon() {
 }
 function addMentionEvent(ev) {
   const d = loadMentions();
-  d.events = [{ id: `${ev.type}-${ev.messageId || ""}-${Date.now()}`, at: Date.now(), ...ev }, ...d.events].slice(0, 3000);
+  d.events = [{ id: `${ev.type}-${ev.messageId || ""}-${Date.now()}`, at: Date.now(), ...ev }, ...d.events].slice(0, limitOf("mentionMax", 100));
   saveMentionsSoon();
 }
 function deleteMentionEvents(pred) {
@@ -913,7 +1011,7 @@ function recordVipMessage(msg, channelId, guildId, ch) {
   const gid = guildId;
   const d = loadVip();
   if (d.messages.some((m) => m.id === msg.id)) return;
-  const max = Math.max(100, Number(getSettings().vipMaxMessages) || DEFAULTS.vipMaxMessages);
+  const max = limitOf("vipMaxMessages", 200);
   d.messages = [{
     id: msg.id,
     userId: msg.author.id,
@@ -928,8 +1026,9 @@ function recordVipMessage(msg, channelId, guildId, ch) {
     createdAt: Date.parse(msg.timestamp) || Date.now(),
     edits: [],
     deletedAt: null,
-  }, ...d.messages].slice(0, max);
-  saveVipSoon();
+  }, ...d.messages];
+  if (d.messages.length > max) enforceMessageLimit();
+  saveVipSoon("messages");
 }
 function onMessageUpdate(action) {
   try {
@@ -943,7 +1042,7 @@ function onMessageUpdate(action) {
     const last = m.edits.length ? m.edits[m.edits.length - 1].content : m.content;
     if (last === msg.content) return;
     m.edits.push({ at: Date.parse(msg.edited_timestamp) || Date.now(), content: msg.content });
-    saveVipSoon();
+    saveVipSoon("messages");
   } catch (e) { Logger.error("MESSAGE_UPDATE", e); }
 }
 function markDeleted(ids) {
@@ -952,7 +1051,7 @@ function markDeleted(ids) {
   for (const m of d.messages) {
     if (!m.deletedAt && ids.includes(m.id)) { m.deletedAt = Date.now(); changed = true; }
   }
-  if (changed) saveVipSoon();
+  if (changed) saveVipSoon("messages");
 }
 const onMessageDelete = (a) => { try { if (a?.id) { markDeleted([a.id]); handleMentionDelete([a.id]); } } catch (e) { Logger.error("MESSAGE_DELETE", e); } };
 const onMessageDeleteBulk = (a) => { try { if (a?.ids?.length) { markDeleted(a.ids); handleMentionDelete(a.ids); } } catch (e) { Logger.error("MESSAGE_DELETE_BULK", e); } };
@@ -1122,8 +1221,8 @@ function closeVoice(userId, cut) {
     return { id, name: nameOf(id), username: u?.username || null, avatarURL: avatarOf(u, id), joinedAt: log.joinedAt || v.joinedAt, leftAt: log.leftAt || null, already: !!log.already };
   });
   delete v.peerLog;
-  d.voice = [{ ...v, peers, leftAt: end, cut: !!cut }, ...(d.voice || [])].slice(0, 3000);
-  saveVipSoon();
+  d.voice = [{ ...v, peers, leftAt: end, cut: !!cut }, ...(d.voice || [])].slice(0, limitOf("vipMaxVoice", 50));
+  saveVipSoon("voice");
 }
 function initVoiceFor(id) {
   if (!getSettings().vipTrackVoice) return;
@@ -1270,7 +1369,7 @@ function collectBackup() {
       settings: Data.load("settings") || {}, history: Data.load(k("history")) || [], ignored: Data.load(k("ignored")) || null,
       vip: Data.load(k("vip")) || {}, reqCanceled: Data.load(k("reqCanceled")) || [], reqPending: Data.load(k("reqPending")) || {},
       vipEvents: v.events, vipMessages: v.messages, vipVoice: v.voice, mentions: m.events,
-      calls: c.sessions, firstContacts: Data.load(k("firstContacts")) || [], knownContacts: Data.load(k("knownContacts")) || [],
+      calls: c.sessions, callTotals: c.totals, firstContacts: Data.load(k("firstContacts")) || [], knownContacts: Data.load(k("knownContacts")) || [],
     },
   };
 }
@@ -1294,16 +1393,17 @@ function restoreBackup(b) {
   Data.save(k("vip"), D.vip || {});
   Data.save(k("reqCanceled"), D.reqCanceled || []);
   Data.save(k("reqPending"), D.reqPending || {});
-  RawData.save(VIP_FILE, `events_${me}`, D.vipEvents || []);
-  RawData.save(VIP_FILE, `messages_${me}`, D.vipMessages || []);
-  RawData.save(VIP_FILE, `voice_${me}`, D.vipVoice || []);
+  RawData.save(VIP_FILES.events, `events_${me}`, D.vipEvents || []);
+  RawData.save(VIP_FILES.messages, `messages_${me}`, D.vipMessages || []);
+  RawData.save(VIP_FILES.voice, `voice_${me}`, D.vipVoice || []);
   RawData.save(MENTION_FILE, `events_${me}`, D.mentions || []);
   RawData.save(CALL_FILE, `sessions_${me}`, D.calls || []);
+  RawData.save(CALL_FILE, `totals_${me}`, D.callTotals || totalsFromSessions(D.calls || []));
   Data.save(k("firstContacts"), D.firstContacts || []);
   if (D.knownContacts) Data.save(k("knownContacts"), D.knownContacts);
   callData.owner = null; callData.dirty = false;
-  settingsCache = null; historyCache = null; vipData.owner = null; vipData.dirty = false; mentionData.owner = null; mentionData.dirty = false;
-  loadVip(); loadMentions(); loadCalls(); initPresenceCache(); initVoice(); initKnownContacts();
+  settingsCache = null; historyCache = null; vipData.owner = null; vipData.dirty.clear(); mentionData.owner = null; mentionData.dirty = false;
+  loadVip(); loadMentions(); loadCalls(); enforceLimits(); initPresenceCache(); initVoice(); initKnownContacts();
   [historyBus, vipBus, reqBus, mentionBus, settingsBus, backupBus, callBus].forEach((b2) => b2.emit());
   updateBadge();
 }
@@ -1552,19 +1652,37 @@ function patchRelationshipActions() {
 }
 
 const CALL_FILE = "LurkCalls";
-const callData = { owner: null, sessions: [], timer: null, dirty: false };
+const callData = { owner: null, sessions: [], totals: {}, timer: null, dirty: false };
+function addToTotals(totals, p, at, ms, s) {
+  const t = totals[p.id] || { ms: 0, calls: 0, firstAt: at, lastAt: 0 };
+  t.ms += ms; t.calls += 1;
+  t.firstAt = Math.min(t.firstAt || at, at);
+  if (at >= t.lastAt) { t.lastAt = at; t.name = p.name || t.name; t.username = p.username || t.username; t.avatarURL = p.avatarURL || t.avatarURL; t.place = s ? { guildId: s.guildId || null, channelId: s.channelId || null, guildName: s.guildName || null, channelName: s.channelName || null } : t.place; }
+  totals[p.id] = t;
+}
+function totalsFromSessions(sessions) {
+  const totals = {};
+  for (const s of [...sessions].reverse()) for (const p of s.peers || []) addToTotals(totals, p, s.leftAt, p.ms, s);
+  return totals;
+}
 const callBus = createBus();
 function loadCalls() {
   if (callData.owner === myId()) return callData;
   flushCalls();
   callData.owner = myId();
   callData.sessions = safe(() => RawData.load(CALL_FILE, `sessions_${myId()}`)) || [];
+  const totals = safe(() => RawData.load(CALL_FILE, `totals_${myId()}`));
+  callData.totals = totals || totalsFromSessions(callData.sessions);
+  if (!totals && callData.sessions.length) { callData.dirty = true; flushCalls(); }
   return callData;
 }
 function flushCalls() {
   if (!callData.dirty || !callData.owner) return;
   clearTimeout(callData.timer);
-  try { RawData.save(CALL_FILE, `sessions_${callData.owner}`, callData.sessions); } catch (e) { Logger.error("calls save", e); }
+  try {
+    RawData.save(CALL_FILE, `sessions_${callData.owner}`, callData.sessions);
+    RawData.save(CALL_FILE, `totals_${callData.owner}`, callData.totals);
+  } catch (e) { Logger.error("calls save", e); }
   callData.dirty = false;
 }
 function saveCallsSoon() {
@@ -1600,7 +1718,9 @@ function endMyCall(cut) {
     return { id, ms: p.ms, name: nameOf(id), username: u?.username || null, avatarURL: avatarOf(u, id) };
   });
   const d = loadCalls();
-  d.sessions = [{ ...s, peers, leftAt: Date.now(), cut: !!cut }, ...d.sessions].slice(0, 5000);
+  const leftAt = Date.now();
+  for (const p of peers) addToTotals(d.totals, p, leftAt, p.ms, s);
+  d.sessions = [{ ...s, peers, leftAt, cut: !!cut }, ...d.sessions].slice(0, limitOf("callMaxSessions", 50));
   saveCallsSoon();
 }
 function processMyCall(list) {
@@ -1629,13 +1749,13 @@ function initMyCall() {
 
 function callTotals() {
   const map = new Map();
+  for (const [id, t] of Object.entries(loadCalls().totals || {})) map.set(id, { id, name: t.name, username: t.username, avatarURL: t.avatarURL, ms: t.ms, calls: t.calls, lastAt: t.lastAt, place: t.place ? placeLabel(t.place) : null });
   const add = (p, at, ms, place) => {
     const t = map.get(p.id) || { id: p.id, name: p.name, username: p.username, avatarURL: p.avatarURL, ms: 0, calls: 0, lastAt: 0, place: null };
     t.ms += ms; t.calls += 1;
     if (at > t.lastAt) { t.lastAt = at; t.place = place; t.name = p.name || t.name; t.avatarURL = p.avatarURL || t.avatarURL; }
     map.set(p.id, t);
   };
-  for (const s of loadCalls().sessions) for (const p of s.peers || []) add(p, s.leftAt, p.ms, placeLabel(s));
   if (myCall.sess) {
     for (const [id, p] of Object.entries(myCall.sess.peers)) {
       const ms = p.ms + (p.since != null ? Date.now() - p.since : 0);
@@ -1864,6 +1984,7 @@ const SI = {
   eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35",
   globe: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2c2.5 2.7 4 6.2 4 10s-1.5 7.3-4 10M12 2c-2.5 2.7-4 6.2-4 10s1.5 7.3 4 10",
+  storage: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36L21 8M21 3v5h-5",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
 };
@@ -2015,6 +2136,8 @@ function screenTitle(s) {
     case "person": return nameOf(s.userId, getHistory().find((r) => r.userId === s.userId) || {});
     case "vipPerson": return nameOf(s.userId, getVipList()[s.userId] || {});
     case "callPerson": return nameOf(s.userId);
+    case "archives": return L("Mensagens antigas", "Old messages");
+    case "archiveBlock": { const a = getArchives().find((x) => x.file === s.file); return a ? archivePeriod(a) : L("Arquivo", "Archive"); }
     case "settingsPage": return txt(settingsPages().find((p) => p.id === s.id)?.title) || NAMES.settings();
     default: return NAMES[s.type]?.() || "";
   }
@@ -2086,6 +2209,8 @@ function ScreenRouter({ s }) {
     case "callPerson": return h(CallPersonScreen, { userId: s.userId });
     case "settings": return h(SettingsScreen);
     case "settingsPage": return h(SettingsPageScreen, { id: s.id });
+    case "archives": return h(ArchivesScreen);
+    case "archiveBlock": return h(ArchiveBlockScreen, { file: s.file });
     default: return null;
   }
 }
@@ -2476,9 +2601,85 @@ function VipPeopleList() {
       })));
 }
 
-function MessagesFeed({ channelId }) {
-  useBus(vipBus, settingsBus);
+const msgBody = (m) => {
+  const current = m.edits?.length ? m.edits[m.edits.length - 1].content : m.content;
+  return current || (m.attachments?.length ? "" : m.stickers?.length ? L(`[figurinha: ${m.stickers.join(", ")}]`, `[sticker: ${m.stickers.join(", ")}]`) : NO_TEXT());
+};
+const msgHaystack = (m) => normalize([m.content, ...(m.edits || []).map((e) => e.content), nameOf(m.userId, getVipList()[m.userId] || {}), usernameOf(m.userId) || "", m.channelName || "", m.guildName || "", ...(m.attachments || []).map((a) => a.name)].join(" "));
+function useArchiveMessages(entries, enabled) {
+  const [state, setState] = React.useState({ loading: false, list: [], failed: 0 });
+  const key = entries.map((e) => e.file).join("|");
+  React.useEffect(() => {
+    if (!enabled || !entries.length) { setState({ loading: false, list: [], failed: 0 }); return; }
+    let alive = true;
+    setState((st) => ({ ...st, loading: true }));
+    Promise.allSettled(entries.map((e) => readArchive(e))).then((res) => {
+      if (!alive) return;
+      setState({ loading: false, list: res.flatMap((r) => (r.status === "fulfilled" ? r.value : [])), failed: res.filter((r) => r.status === "rejected").length });
+    });
+    return () => { alive = false; };
+  }, [key, enabled]);
+  return state;
+}
+function MessageResults({ list, limit, setLimit, emptyTitle }) {
+  return h(React.Fragment, null,
+    list.length ? h(DayList, { items: list.slice(0, limit), getTime: (m) => m.createdAt, render: (m) => h(MessageEntry, { key: m.id, m, body: msgBody(m), edited: m.edits?.length > 0, who: true }) })
+      : h(Empty, { icon: "search", title: emptyTitle }),
+    list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 50) }, L("Mostrar mais", "Show more")) : null);
+}
+function StorageArchiveLink() {
+  useBus(archiveBus);
   const nav = useNav();
+  return h(Group, null, h(NavRow, { icon: "archive", color: "#8e8e93", title: L("Mensagens antigas", "Old messages"), detail: String(getArchives().length), onClick: () => nav.push({ type: "archives" }) }));
+}
+function ArchivesScreen() {
+  useBus(archiveBus);
+  const nav = useNav();
+  const list = getArchives();
+  const total = list.reduce((n, a) => n + (a.bytes || 0), 0);
+  const max = limitOf("vipMaxMessages", 200);
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: L("Mensagens antigas", "Old messages"), subtitle: list.length ? L(`${list.length} ${plural(list.length, "arquivo", "arquivos")} · ${fmtBytes(total)}`, `${list.length} ${plural(list.length, "archive", "archives")} · ${fmtBytes(total)}`) : null }),
+    list.length
+      ? h(Group, { footer: L(`Ficam na pasta ${ARCHIVE_DIR}, dentro da pasta de plugins. Nada é apagado sozinho.`, `Saved in the ${ARCHIVE_DIR} folder, inside your plugins folder. Nothing is deleted automatically.`) },
+          list.map((a) => h(NavRow, { key: a.file, icon: "archive", color: "#8e8e93", title: archivePeriod(a), subtitle: L(`${a.count} mensagens · ${fmtBytes(a.bytes || 0)}`, `${a.count} messages · ${fmtBytes(a.bytes || 0)}`), onClick: () => nav.push({ type: "archiveBlock", file: a.file }) })))
+      : h(Empty, { icon: "archive", title: L("Nenhuma mensagem arquivada ainda", "No archived messages yet") }, L(`Quando as mensagens dos VIPs passarem de ${max}, as mais antigas vêm pra cá em vez de serem apagadas.`, `When VIP messages go over ${max}, the oldest ones move here instead of being deleted.`)));
+}
+function ArchiveBlockScreen({ file }) {
+  useBus(archiveBus);
+  const nav = useNav();
+  const entry = getArchives().find((a) => a.file === file);
+  const entries = React.useMemo(() => (entry ? [entry] : []), [file, !!entry]);
+  const { loading, list, failed } = useArchiveMessages(entries, true);
+  const [q, setQ] = React.useState("");
+  const [who, setWho] = React.useState("all");
+  const [limit, setLimit] = React.useState(50);
+  if (!entry) return h(Empty, { icon: "archive", title: L("Arquivo não encontrado", "Archive not found") });
+  const people = [...new Set(list.map((m) => m.userId))];
+  const query = normalize(q.trim());
+  let shown = [...list].sort((a, b) => b.createdAt - a.createdAt);
+  if (who !== "all") shown = shown.filter((m) => m.userId === who);
+  if (query) shown = shown.filter((m) => msgHaystack(m).includes(query));
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: archivePeriod(entry), subtitle: L(`${entry.count} mensagens · ${fmtBytes(entry.bytes || 0)}`, `${entry.count} messages · ${fmtBytes(entry.bytes || 0)}`) }),
+    h(Search, { value: q, onChange: (v) => { setQ(v); setLimit(50); }, placeholder: L("Buscar texto, pessoa ou canal", "Search text, person or channel") }),
+    people.length > 1 ? h("div", { className: "dmtt-row2" }, h("select", { className: "dmtt-select", value: who, onChange: (e) => { setWho(e.target.value); setLimit(50); } },
+      h("option", { value: "all" }, L("Todas as pessoas", "Everyone")),
+      people.map((id) => h("option", { key: id, value: id }, nameOf(id, getVipList()[id] || {}))))) : null,
+    loading ? h(Empty, { icon: "archive", title: L("Abrindo arquivo…", "Opening archive…") })
+      : failed ? h(Empty, { icon: "archive", title: L("Não consegui abrir este arquivo", "Couldn't open this archive") }, L(`Ele pode ter sido movido ou apagado da pasta ${ARCHIVE_DIR}.`, `It may have been moved or deleted from the ${ARCHIVE_DIR} folder.`))
+      : h(MessageResults, { list: shown, limit, setLimit, emptyTitle: L("Nenhuma mensagem encontrada", "No messages found") }),
+    h(Group, null, h(NavRow, { title: L("Apagar este arquivo", "Delete this archive"), danger: true, onClick: () => confirmDanger(L("Apagar arquivo", "Delete archive"), L(`As ${entry.count} mensagens de ${archivePeriod(entry)} serão apagadas do seu computador. Essa ação não pode ser desfeita.`, `The ${entry.count} messages from ${archivePeriod(entry)} will be deleted from your computer. This can't be undone.`), () => { deleteArchive(entry); nav.pop(); }) })));
+}
+function MessagesFeed({ channelId }) {
+  useBus(vipBus, settingsBus, archiveBus);
+  const nav = useNav();
+  const [q, setQ] = React.useState("");
+  const [inArchive, setInArchive] = React.useState(false);
+  const [qLimit, setQLimit] = React.useState(50);
+  const archives = getArchives();
+  const query = normalize(q.trim());
+  const arch = useArchiveMessages(archives, !!query && inArchive);
   const [seenBefore] = React.useState(getDeletedSeen);
   React.useEffect(() => { markDeletedSeen(); }, []);
   const all = vipChanges();
@@ -2495,12 +2696,31 @@ function MessagesFeed({ channelId }) {
   }
   const ch = channelId ? ChannelStore?.getChannel?.(channelId) : null;
   const hereLabel = ch ? (ch.guild_id ? `#${ch.name}` : ch.type === 3 ? channelLabel(ch) : L("Esta conversa", "This chat")) : null;
+  const searchBar = h(React.Fragment, null,
+    h(Search, { value: q, onChange: (v) => { setQ(v); setQLimit(50); }, placeholder: L("Buscar nas mensagens dos VIPs", "Search VIP messages") }),
+    query && archives.length ? h(Group, null, h("div", { className: "dmtt-row" },
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L(`Buscar também nas mensagens antigas (${archives.length} ${plural(archives.length, "arquivo", "arquivos")})`, `Also search old messages (${archives.length} ${plural(archives.length, "archive", "archives")})`))),
+      h(Switch, { checked: inArchive, onChange: setInArchive, label: L("Mensagens antigas", "Old messages") }))) : null);
+  if (query) {
+    const ids = new Set();
+    const found = [];
+    for (const m of [...loadVip().messages, ...(inArchive ? arch.list : [])]) {
+      if (ids.has(m.id) || !msgHaystack(m).includes(query)) continue;
+      ids.add(m.id); found.push(m);
+    }
+    found.sort((a, b) => b.createdAt - a.createdAt);
+    return h(React.Fragment, null, searchBar,
+      inArchive && arch.loading ? h(Empty, { icon: "archive", title: L("Procurando nas mensagens antigas…", "Searching old messages…") })
+        : h(MessageResults, { list: found, limit: qLimit, setLimit: setQLimit, emptyTitle: L("Nenhuma mensagem encontrada", "No messages found") }));
+  }
   let list = where === "here" ? here : all;
   const nDel = list.filter((m) => m.deletedAt).length;
   const nEd = list.filter((m) => m.edits?.length).length;
   if (kind === "deleted") list = list.filter((m) => m.deletedAt);
   if (kind === "edited") list = list.filter((m) => m.edits?.length);
   return h(React.Fragment, null,
+    searchBar,
+    h(Group, null, h(NavRow, { icon: "archive", color: "#8e8e93", title: L("Mensagens antigas", "Old messages"), detail: archives.length ? `${archives.length}` : L("Nenhuma", "None"), onClick: () => nav.push({ type: "archives" }) })),
     here.length ? h(Segmented, { value: where, onChange: setWhere, options: [["here", hereLabel, here.length], ["all", L("Todos os lugares", "Everywhere"), all.length]] }) : null,
     h(Segmented, { value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd]] }),
     list.length ? h(DayList, { items: list.slice(0, limit), getTime: lastChangeAt, render: (m) => h(ChangeCard, { key: m.id, m, isNew: lastChangeAt(m) > seenBefore, showPlace: where === "all" }) })
@@ -2637,12 +2857,13 @@ function MessagesList({ id, messages }) {
     } }) : h(Empty, { icon: "at", title: onlyChanged ? L("Nada apagado ou editado", "Nothing deleted or edited") : L("Nenhuma mensagem ainda", "No messages yet") }),
     mine.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 50) }, L("Mostrar mais", "Show more")) : null);
 }
-function MessageEntry({ m, body, edited }) {
+function MessageEntry({ m, body, edited, who }) {
   const [open, setOpen] = React.useState(false);
-  const place = m.guildId ? `#${m.channelName || L("canal", "channel")} · ${m.guildName || ""}` : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
+  const place0 = m.guildId ? `#${m.channelName || L("canal", "channel")} · ${m.guildName || ""}` : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
   return h("div", { className: "dmtt-card" },
     h("div", { className: "dmtt-card-head" },
-      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-sub dmtt-strong" }, place)),
+      who ? h(Avatar, { userId: m.userId, size: 22 }) : null,
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-sub dmtt-strong" }, who ? `${nameOf(m.userId, getVipList()[m.userId] || {})} · ${place0}` : place0)),
       m.deletedAt ? h("span", { className: "dmtt-tag is-red", title: fmtDate(m.deletedAt) }, L(`Apagada ${fmtHM(m.deletedAt)}`, `Deleted ${fmtHM(m.deletedAt)}`)) : null,
       edited ? h("button", { className: "dmtt-tag is-btn", onClick: () => setOpen(!open) }, L(`Editada ${m.edits.length}×`, `Edited ${m.edits.length}×`)) : null,
       h("span", { className: "dmtt-row-time" }, fmtHM(m.createdAt))),
@@ -2891,8 +3112,7 @@ function settingsPages() {
         { title: L("Registro", "Logging"), footer: L("O Discord só manda o sinal de digitação a cada ~10 s, então as durações são aproximadas.", "Discord only sends the typing signal every ~10 s, so durations are approximate."), items: [
           num("mergeWindow", L("Juntar tentativas em até", "Merge attempts within"), 0, 3600, 5, "s"),
           num("minDuration", L("Ignorar digitação menor que", "Ignore typing shorter than"), 0, 600, 1, "s"),
-          num("sentLaterWindow", L("Marcar \"enviou depois\" em até", "Mark \"sent later\" within"), 0, 1440, 1, "min"),
-          num("maxEntries", L("Guardar no máximo", "Keep at most"), 50, 20000, 50, L("registros", "records"))] },
+          num("sentLaterWindow", L("Marcar \"enviou depois\" em até", "Mark \"sent later\" within"), 0, 1440, 1, "min")] },
       ] },
     { id: "mentions", title: NAMES.mentions(), icon: "at", color: "#ff9f0a",
       sections: [
@@ -2922,7 +3142,6 @@ function settingsPages() {
           { ...sw("vipLastSeenHeader", L("No topo da conversa aberta", "At the top of the open conversation")), after: () => syncDOM() },
           { ...sw("vipLastSeenMembers", L("Na lista de membros dos servidores", "In server member lists")), after: () => syncDOM() }] },
         { title: "Calls", items: [sw("vipTrackVoice", L("Registrar calls dos VIPs", "Log VIP calls"), L("Canal, quem estava, quanto tempo, mute e transmissão.", "Channel, who was there, how long, mute and screen share."))] },
-        { title: L("Armazenamento", "Storage"), footer: L("Links de anexos do Discord expiram depois de um tempo.", "Discord attachment links expire after a while."), items: [num("vipMaxMessages", L("Guardar no máximo", "Keep at most"), 100, 50000, 100, L("mensagens", "messages"))] },
       ], custom: () => h(VipAddById, null) },
     { id: "calls", title: L("Calls e apagadas", "Calls & deleted"), icon: "headset", color: "#bf5af2",
       sections: [
@@ -2941,6 +3160,18 @@ function settingsPages() {
         { ...sw("showSnipeButton", L("Botão de histórico (apagadas e editadas)", "History button (deleted & edited)")), after: () => syncDOM() },
         { id: "lurkIcon", label: L("Ícone do Lurk", "Lurk icon"), type: "select", options: [["ghost", L("Fantasminha", "Ghost")], ["ninja", L("Máscara ninja", "Ninja mask")], ["eye", L("Olho", "Eye")]], after: () => syncDOM() }] }] },
     { id: "ignored", title: L("Ignorados", "Ignored"), icon: "ban", color: "#8e8e93", summary: () => { const ig = getIgnored(); const n = Object.keys(ig.users).length + Object.keys(ig.channels).length; return n ? String(n) : L("Nenhum", "None"); }, sections: [], custom: () => h(IgnoredList) },
+    { id: "storage", title: L("Armazenamento", "Storage"), icon: "storage", color: "#30b0c7", summary: () => { const n = getArchives().length; return n ? L(`${n} ${plural(n, "arquivo", "arquivos")}`, `${n} ${plural(n, "archive", "archives")}`) : ""; },
+      sections: [
+        { title: L("Mensagens dos VIPs", "VIP messages"), footer: L(`Ao passar do limite, a metade mais antiga vai para o arquivo morto (pasta ${ARCHIVE_DIR}). Nada é apagado. Links de anexos do Discord expiram depois de um tempo.`, `When the limit is reached, the oldest half moves to the archive (${ARCHIVE_DIR} folder). Nothing is deleted. Discord attachment links expire after a while.`),
+          items: [{ ...num("vipMaxMessages", L("Guardar até", "Keep up to"), 200, 20000, 100, L("mensagens", "messages")), after: () => safe(() => enforceLimits()) }] },
+        { title: L("Apagados ao passar do limite", "Deleted past the limit"), footer: L("Os mais antigos são apagados sozinhos. O tempo total em call com cada pessoa é guardado para sempre.", "The oldest entries are deleted automatically. Your total call time with each person is kept forever."),
+          items: [
+            { ...num("maxEntries", NAMES.typing(), 50, 20000, 50, L("registros", "records")), after: () => safe(() => enforceLimits()) },
+            { ...num("vipMaxEvents", L("Status dos VIPs", "VIP statuses"), 100, 20000, 100, L("registros", "records")), after: () => safe(() => enforceLimits()) },
+            { ...num("vipMaxVoice", L("Calls dos VIPs", "VIP calls"), 50, 5000, 50, "calls"), after: () => safe(() => enforceLimits()) },
+            { ...num("mentionMax", NAMES.mentions(), 100, 20000, 100, L("registros", "records")), after: () => safe(() => enforceLimits()) },
+            { ...num("callMaxSessions", L("Detalhes das suas calls", "Your call details"), 50, 20000, 50, "calls"), after: () => safe(() => enforceLimits()) }] },
+      ], custom: () => h(StorageArchiveLink) },
     { id: "updates", title: L("Atualizações", "Updates"), icon: "refresh", color: "#34c759", summary: () => VERSION,
       sections: [
         { title: L("Depois de atualizar", "After updating"), footer: L("O Lurk procura e instala versões novas sozinho ao abrir o Discord e a cada 6 horas, para que correções cheguem a todo mundo.", "Lurk finds and installs new versions on its own when Discord starts and every 6 hours, so fixes reach everyone."), items: [{ id: "changelogMode", label: L("Novidades da versão", "What's new"), type: "select", options: [["ask", L("Perguntar se quero ver", "Ask me")], ["always", L("Mostrar sempre", "Always show")], ["never", L("Não mostrar", "Don't show")]] }] },
@@ -2949,7 +3180,7 @@ function settingsPages() {
       sections: [{ items: [sw("backupEnabled", L("Backup automático", "Automatic backup")), num("backupDays", L("A cada", "Every"), 1, 60, 1, L("dias", "days")), num("backupKeep", L("Guardar", "Keep"), 1, 10, 1, L("cópias", "copies"))] }], custom: () => h(BackupSection) },
   ];
 }
-const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus"], ["privado", "mentions", "contatos", "vip", "calls"], ["barra", "button", "ignored", "backup", "updates"]];
+const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus"], ["privado", "mentions", "contatos", "vip", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
 
 function SettingsScreen() {
   useBus(settingsBus, vipBus, backupBus, historyBus);
@@ -3529,10 +3760,12 @@ module.exports = class Lurk {
       Dispatcher.addInterceptor((a) => { try { return window.__dmttSnipeHook?.(a) || false; } catch { return false; } });
       window.__dmttInterceptorAdded = true;
     }
+    safe(() => applyStorageMigration());
     getHistory();
     loadVip();
     loadMentions();
     loadCalls();
+    safe(() => enforceLimits());
     initPresenceCache();
     safe(() => initVoice());
     safe(() => initMyCall());
