@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.3.1
+ * @version 2.4.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.3.1";
+const VERSION = "2.4.0";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,10 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.4.0", items: [
+    ["new", "Lista VIP: há quanto tempo a pessoa está offline aparece embaixo do nome dela na lista de mensagens diretas.", "VIP list: how long someone has been offline now shows under their name in your direct messages list."],
+    ["new", "Em Ajustes › Lista VIP › Última vez online você também pode mostrar há quanto tempo a pessoa está online, no topo da conversa aberta e na lista de membros dos servidores.", "In Settings › VIP list › Last online you can also show how long someone has been online, at the top of the open conversation and in server member lists."],
+  ] },
   { version: "2.3.1", items: [
     ["improved", "Melhorias no sistema de atualização.", "Improvements to the update system."],
   ] },
@@ -115,6 +119,11 @@ const DEFAULTS = {
   vipRecordDMs: true,
   vipTrackVoice: true,
   vipSubscribeTyping: true,
+  vipLastSeen: true,
+  vipLastSeenMode: "offline",
+  vipLastSeenDMs: true,
+  vipLastSeenHeader: false,
+  vipLastSeenMembers: false,
 
   trackMyCalls: true,
   showSnipeButton: true,
@@ -1367,11 +1376,63 @@ function endSession(key, register) {
 }
 
 const presenceCache = new Map();
+const isOnlineStatus = (st) => !!st && st !== "offline";
+let seenCache = null;
+const getSeen = () => (seenCache ??= Data.load(k("vipSeen")) || {});
+function saveSeen() { Data.save(k("vipSeen"), seenCache || {}); }
+function markSeen2(id, online) {
+  const all = getSeen();
+  const cur = all[id] || {};
+  all[id] = online ? { ...cur, state: "online", onlineAt: Date.now() } : { ...cur, state: "offline", offlineAt: Date.now() };
+  saveSeen();
+}
+function initSeen() {
+  seenCache = null;
+  const all = getSeen();
+  const events = loadVip().events;
+  for (const id of Object.keys(getVipList())) {
+    const st = rawPresence(id)?.status;
+    if (!st) continue;
+    const online = isOnlineStatus(st);
+    let e = all[id];
+    if (!e) {
+      const pres = events.filter((x) => x.userId === id && x.type === "presence");
+      const lastOff = pres.find((x) => x.to === "offline");
+      const lastOn = pres.find((x) => x.from === "offline" && isOnlineStatus(x.to));
+      const latest = pres[0];
+      e = latest ? { state: isOnlineStatus(latest.to) ? "online" : "offline", offlineAt: lastOff?.at || null, onlineAt: lastOn?.at || null } : { state: null };
+    }
+    if (e.state !== (online ? "online" : "offline")) e = online ? { ...e, state: "online", onlineAt: null } : { ...e, state: "offline", offlineAt: null };
+    all[id] = e;
+  }
+  saveSeen();
+}
+function lastSeenInfo(id) {
+  const st = rawPresence(id)?.status;
+  if (!st) return null;
+  const e = getSeen()[id];
+  if (!e) return null;
+  if (!isOnlineStatus(st)) return e.state === "offline" && e.offlineAt ? { kind: "offline", at: e.offlineAt } : null;
+  if (getSettings().vipLastSeenMode !== "both") return null;
+  return e.state === "online" && e.onlineAt ? { kind: "online", at: e.onlineAt } : null;
+}
+function fmtSeen({ kind, at }) {
+  const diff = Date.now() - at;
+  if (diff < 60000) return L(`${kind} agora`, `${kind} now`);
+  if (diff < 3600000) { const m = Math.floor(diff / 60000); return L(`${kind} há ${m} min`, `${kind} for ${m}m`); }
+  if (diff < DAY) { const hh = Math.floor(diff / 3600000); return L(`${kind} há ${hh} h`, `${kind} for ${hh}h`); }
+  if (at >= startOfDay(Date.now()) - DAY) return L(`${kind} desde ontem às ${fmtHM(at)}`, `${kind} since yesterday ${fmtHM(at)}`);
+  const d = new Date(at);
+  return L(`${kind} desde ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`, `${kind} since ${pad(d.getMonth() + 1)}/${pad(d.getDate())}`);
+}
+const fmtSeenTitle = ({ kind, at }) => `${kind === "offline" ? L("Offline desde", "Offline since") : L("Online desde", "Online since")} ${new Date(at).toLocaleString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 function initPresenceCache() {
   presenceCache.clear();
   for (const id of Object.keys(getVipList())) presenceCache.set(id, rawPresence(id));
+  safe(() => initSeen());
 }
 function onPresenceChange() {
+  let seenChanged = false;
   try {
     const list = getVipList();
     const s = getSettings();
@@ -1381,6 +1442,7 @@ function onPresenceChange() {
       const prev = presenceCache.get(id);
       presenceCache.set(id, p);
       if (!prev || prev.status === p.status) continue;
+      if (isOnlineStatus(prev.status) !== isOnlineStatus(p.status)) { markSeen2(id, isOnlineStatus(p.status)); seenChanged = true; }
       addVipEvent({ type: "presence", userId: id, at: Date.now(), from: prev.status, to: p.status, devices: p.devices });
       if (prev.status === "offline" && vipFlag(id, "notifyOnline")) {
         notify({
@@ -1391,6 +1453,7 @@ function onPresenceChange() {
       }
     }
   } catch (e) { Logger.error("presence", e); }
+  if (seenChanged) safe(() => placeLastSeen());
 }
 
 const REL_PENDING_INCOMING = 3;
@@ -2852,6 +2915,12 @@ function settingsPages() {
           { ...sw("vipSubscribeTyping", L("Acompanhar todos os servidores em comum", "Watch all shared servers"), L("Experimental. Sem isto o Discord só avisa digitação dos servidores que você abriu.", "Experimental. Without it, Discord only reports typing in servers you've opened.")), after: (v) => v && scheduleSubscribe() },
           sw("vipRecordMessages", L("Registrar mensagens", "Log messages"), L("Texto e anexos, incluindo editadas e apagadas.", "Text and attachments, including edits and deletions.")),
           sw("vipRecordDMs", L("Incluir mensagens no privado", "Include DMs"))] },
+        { title: L("Última vez online", "Last online"), footer: L("Aparece embaixo do nome dos VIPs. Só conta o que o Lurk viu com o seu Discord aberto.", "Shows under your VIPs' names. Only counts what Lurk saw while your Discord was open."), items: [
+          { ...sw("vipLastSeen", L("Mostrar última vez online", "Show last online")), after: () => syncDOM() },
+          { id: "vipLastSeenMode", label: L("Mostrar", "Show"), type: "select", options: [["offline", L("Só quando estiver offline", "Only when offline")], ["both", L("Offline e online", "Offline and online")]], after: () => syncDOM() },
+          { ...sw("vipLastSeenDMs", L("Na lista de mensagens diretas", "In the direct messages list")), after: () => syncDOM() },
+          { ...sw("vipLastSeenHeader", L("No topo da conversa aberta", "At the top of the open conversation")), after: () => syncDOM() },
+          { ...sw("vipLastSeenMembers", L("Na lista de membros dos servidores", "In server member lists")), after: () => syncDOM() }] },
         { title: "Calls", items: [sw("vipTrackVoice", L("Registrar calls dos VIPs", "Log VIP calls"), L("Canal, quem estava, quanto tempo, mute e transmissão.", "Channel, who was there, how long, mute and screen share."))] },
         { title: L("Armazenamento", "Storage"), footer: L("Links de anexos do Discord expiram depois de um tempo.", "Discord attachment links expire after a while."), items: [num("vipMaxMessages", L("Guardar no máximo", "Keep at most"), 100, 50000, 100, L("mensagens", "messages"))] },
       ], custom: () => h(VipAddById, null) },
@@ -3080,8 +3149,89 @@ function updateSnipeBadge() {
 
 let domObserver = null;
 let domRaf = 0;
+const hasClass = (el, re) => [...(el?.classList || [])].some((c) => re.test(c));
+function seenSpan(info, extra) {
+  const span = document.createElement("span");
+  span.className = `dmtt-ls ${extra || ""}`;
+  span.textContent = fmtSeen(info);
+  span.title = fmtSeenTitle(info);
+  return span;
+}
+function updateSpan(span, info) {
+  const t = fmtSeen(info), ti = fmtSeenTitle(info);
+  if (span.textContent !== t) span.textContent = t;
+  if (span.title !== ti) span.title = ti;
+}
+function injectRow(content, uid, keep) {
+  if (!content) return;
+  const info = isVip(uid) ? lastSeenInfo(uid) : null;
+  let span = content.querySelector(".dmtt-ls");
+  if (!info) return;
+  const sub = [...content.children].find((c) => hasClass(c, /^subText_/));
+  if (!span) span = seenSpan(info);
+  else updateSpan(span, info);
+  if (sub) {
+    if (span.parentElement !== sub) sub.insertBefore(span, sub.firstChild);
+    sub.classList.add("dmtt-ls-host");
+    content.querySelector(":scope > .dmtt-ls-line")?.remove();
+  } else {
+    let line = content.querySelector(":scope > .dmtt-ls-line");
+    if (!line) { line = document.createElement("div"); line.className = "dmtt-ls-line"; content.appendChild(line); }
+    if (span.parentElement !== line) line.appendChild(span);
+  }
+  keep.add(span);
+}
+function userIdFromFiber(el) {
+  let f = safe(() => BdApi.ReactUtils.getInternalInstance(el));
+  for (let i = 0; f && i < 20; i++, f = f.return) {
+    const id = f.memoizedProps?.user?.id || f.memoizedProps?.userId;
+    if (typeof id === "string") return id;
+  }
+  return null;
+}
+function placeLastSeen() {
+  const s = getSettings();
+  const keep = new Set();
+  if (s.vipLastSeen && Object.keys(getVipList()).length) {
+    if (s.vipLastSeenDMs) {
+      for (const a of document.querySelectorAll('a[data-list-item-id^="private-channels-"][href^="/channels/@me/"]')) {
+        const ch = ChannelStore?.getChannel?.(a.getAttribute("href").split("/").pop());
+        if (ch?.type !== 1) continue;
+        const uid = ch.getRecipientId?.() || ch.recipients?.[0];
+        injectRow([...a.querySelectorAll("div")].find((d) => hasClass(d, /^content_/)), uid, keep);
+      }
+    }
+    if (s.vipLastSeenMembers) {
+      for (const row of document.querySelectorAll('[class*="member_"]')) {
+        if (!hasClass(row, /^member_{1,2}[0-9a-z]{5,6}$/)) continue;
+        const uid = userIdFromFiber(row);
+        if (!uid) continue;
+        injectRow([...row.querySelectorAll("div")].find((d) => hasClass(d, /^content_/)), uid, keep);
+      }
+    }
+    if (s.vipLastSeenHeader) {
+      const ch = ChannelStore?.getChannel?.(SelectedChannelStore?.getChannelId?.());
+      const uid = ch?.type === 1 ? (ch.getRecipientId?.() || ch.recipients?.[0]) : null;
+      const info = uid && isVip(uid) ? lastSeenInfo(uid) : null;
+      const upperCls = upperContainerModule?.upperContainer?.split(" ")[0];
+      const upper = upperCls ? document.querySelector(`.${upperCls}`) : document.querySelector('section[class*="title_"]');
+      const h1 = upper?.querySelector("h1");
+      if (info && h1) {
+        let span = upper.querySelector(".dmtt-ls.is-header");
+        if (!span) span = seenSpan(info, "is-header");
+        else updateSpan(span, info);
+        if (h1.nextElementSibling !== span) h1.insertAdjacentElement("afterend", span);
+        keep.add(span);
+      }
+    }
+  }
+  for (const span of document.querySelectorAll(".dmtt-ls")) if (!keep.has(span)) span.remove();
+  for (const line of document.querySelectorAll(".dmtt-ls-line")) if (!line.querySelector(".dmtt-ls")) line.remove();
+  for (const host of document.querySelectorAll(".dmtt-ls-host")) if (!host.querySelector(".dmtt-ls")) host.classList.remove("dmtt-ls-host");
+}
 function syncDOM() {
   try { placeToolbarButton(); } catch (e) { Logger.error("toolbar", e); }
+  try { placeLastSeen(); } catch (e) { Logger.error("lastseen", e); }
   try { placeGuildBar(); } catch (e) { Logger.error("guildbar", e); }
 }
 function startDOM() {
@@ -3101,9 +3251,17 @@ function stopDOM() {
   toolbarBtn?.remove(); toolbarBtn = null;
   snipeBtn?.remove(); snipeBtn = null;
   unmountGuildBar();
+  document.querySelectorAll(".dmtt-ls, .dmtt-ls-line").forEach((n) => n.remove());
+  document.querySelectorAll(".dmtt-ls-host").forEach((n) => n.classList.remove("dmtt-ls-host"));
 }
 
 const CSS = `
+.dmtt-ls { flex-shrink: 0; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--channels-default, var(--text-muted)); }
+.dmtt-ls-line { display: flex; min-width: 0; overflow: hidden; }
+.dmtt-ls-host { display: flex !important; align-items: center; min-width: 0; }
+.dmtt-ls-host > :not(.dmtt-ls) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dmtt-ls-host > .dmtt-ls::after { content: "·"; margin: 0 4px; }
+.dmtt-ls.is-header { align-self: center; margin-left: 8px; font-size: 13px; color: var(--text-muted); }
 .dmtt-guildbar { display: flex; flex-direction: column; gap: var(--space-xs, 8px); width: 100%; }
 .dmtt-guildbar.dmtt-empty-bar { display: none; }
 .dmtt-li { position: relative; display: flex; justify-content: center; width: 100%; }
@@ -3380,7 +3538,7 @@ module.exports = class Lurk {
     safe(() => initMyCall());
     safe(() => initKnownContacts());
     PresenceStore?.addChangeListener?.(onPresenceChange);
-    this.onChannelSelect = () => {};
+    this.onChannelSelect = () => safe(() => placeLastSeen());
     SelectedChannelStore?.addChangeListener?.(this.onChannelSelect);
     this.onSettings = settingsBus.sub(() => safe(() => syncDOM()));
     scheduleSubscribe();
@@ -3394,6 +3552,7 @@ module.exports = class Lurk {
     safe(() => afterUpdateCheck());
     this.updateTimer = setTimeout(() => checkForUpdate(false), 20000);
     this.updateInterval = setInterval(() => checkForUpdate(false), 6 * 3600000);
+    this.seenInterval = setInterval(() => safe(() => placeLastSeen()), 30000);
   }
 
   patchContextMenus() {
@@ -3456,6 +3615,7 @@ module.exports = class Lurk {
     clearInterval(this.subInterval);
     clearTimeout(this.updateTimer);
     clearInterval(this.updateInterval);
+    clearInterval(this.seenInterval);
     safe(() => updater.notice?.()); updater.notice = null;
     flushVip();
     flushMentions();
