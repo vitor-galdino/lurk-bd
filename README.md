@@ -24,6 +24,7 @@ A [BetterDiscord](https://betterdiscord.app) plugin by [Vitor](https://github.co
 ### ⭐ VIP list
 Add people from their right-click menu or by user ID, and Lurk keeps a closer watch on them:
 - **Status timeline**: online, idle, DND, offline and device, plus time online today. Lurk can tell when a friend is **invisible** (they show as offline but are typing or sending messages).
+- **Last online** under their name in your DM list ("offline for 2h"). Optionally also how long they've been online, at the top of the open conversation and in server member lists.
 - **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
 - **Typed & quit in servers**, across all your shared servers (experimental).
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
@@ -32,6 +33,8 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 ### 🕘 VIP history
 A single feed (clock button in the top bar) with an unread badge:
 - **Messages**: everything your VIPs deleted or edited, in DMs and servers.
+- **Search** through all VIP messages by text, person, channel or server, optionally including old messages.
+- **Old messages**: when VIP messages reach the limit, the oldest ones are archived instead of deleted. Browse, search or delete each archive right inside Lurk.
 - **Status**: every status change.
 - **People**: each VIP with their full history.
 
@@ -46,12 +49,13 @@ A single feed (clock button in the top bar) with an unread badge:
 - **Canceled friend requests**: someone sent you a request and took it back.
 
 ### 📞 Call time
-Total time in calls with each person, with every session listed.
+Total time in calls with each person, kept forever, plus the details of your recent calls (when, where and who was there).
 
 ### And also
 - **Notifications** per event: in-app toast, desktop notification and/or sound, with a master switch for in-app toasts.
 - **Sounds**: a beep, any Discord sound, or your own audio file, with a volume setting.
 - **Focus mode**: silences notifications while you're on Do Not Disturb or playing a game. Everything is still logged.
+- **Storage limits** for every log in one place, so Lurk stays light.
 - **Automatic backups** that you can restore, plus export and import to a file.
 - **Ignore list** for people and groups.
 - **English and Portuguese (Brazil)**. Follows your Discord language, or pick one.
@@ -70,7 +74,8 @@ Total time in calls with each person, with every session listed.
 | Where | What it does |
 | --- | --- |
 | Lurk button (top bar) | Opens Lurk: typed & quit, VIPs, mentions, new contacts, calls and settings |
-| Clock button (top bar) | VIP history: deleted/edited messages, status changes, people |
+| Clock button (top bar) | VIP history: deleted/edited messages, search, old messages, status changes, people |
+| Direct messages list | How long each VIP has been offline, under their name |
 | Server sidebar | Avatar of whoever is typing to you right now; click to open the DM |
 | Right-click a user | See their attempts, add or remove them as VIP, see call time, ignore them |
 | Right-click a group or channel | See typing attempts and deleted/edited messages there |
@@ -84,10 +89,10 @@ Lurk keeps itself up to date. After each update, a window shows what's new in th
 
 ## Privacy
 
-- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIP.config.json`, `LurkBackup.config.json`…). Nothing is uploaded anywhere.
+- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIPMessages.config.json`, `LurkBackup.config.json`… and the `LurkArchives` folder). Nothing is uploaded anywhere.
 - The only network request Lurk makes is to download its own updates from this repository.
 - Lurk only sees what your Discord client already receives. It can't read other people's DMs or servers you're not in.
-- Don't share your config files: they contain your logs.
+- Don't share your config files or the `LurkArchives` folder: they contain your logs.
 
 ## Disclaimer
 
