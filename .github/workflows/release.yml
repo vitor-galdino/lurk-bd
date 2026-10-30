@@ -23,17 +23,19 @@ jobs:
           const s = require("fs").readFileSync("Lurk.plugin.js", "utf8");
           const v = process.argv[1];
           const start = s.indexOf("{ version: \"" + v + "\"");
-          const titles = { new: "New", improved: "Improved", fixed: "Fixed" };
-          let out = "";
+          const T = { en: { new: "New", improved: "Improved", fixed: "Fixed" }, pt: { new: "Novidades", improved: "Melhorias", fixed: "Correções" } };
+          const unq = (x) => x.replace(/\\(.)/g, "$1");
+          let items = [];
           if (start >= 0) {
             const block = s.slice(start, s.indexOf("] },", start));
-            const items = [...block.matchAll(/\[\s*"(new|improved|fixed)",\s*"(?:[^"\\]|\\.)*",\s*"((?:[^"\\]|\\.)*)"\s*\]/g)];
-            for (const t of ["new", "improved", "fixed"]) {
-              const list = items.filter((m) => m[1] === t).map((m) => "- " + m[2].replace(/\\(.)/g, "$1"));
-              if (list.length) out += "### " + titles[t] + "\n" + list.join("\n") + "\n\n";
-            }
+            items = [...block.matchAll(/\[\s*"(new|improved|fixed)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*\]/g)].map((m) => ({ t: m[1], pt: unq(m[2]), en: unq(m[3]) }));
           }
-          out += "**Install:** download `Lurk.plugin.js` below and put it in your BetterDiscord plugins folder.";
+          const section = (lang) => ["new", "improved", "fixed"].map((t) => {
+            const list = items.filter((x) => x.t === t).map((x) => "- " + x[lang]);
+            return list.length ? "### " + T[lang][t] + "\n" + list.join("\n") + "\n" : "";
+          }).filter(Boolean).join("\n");
+          let out = "## English\n\n" + section("en") + "\n**Install:** download `Lurk.plugin.js` below and put it in your BetterDiscord plugins folder.\n\n";
+          out += "## Português\n\n" + section("pt") + "\n**Instalar:** baixe o `Lurk.plugin.js` abaixo e coloque na pasta de plugins do BetterDiscord.\n";
           require("fs").writeFileSync("notes.md", out);
           ' "${{ steps.v.outputs.version }}"
       - name: Publish release
