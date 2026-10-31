@@ -55,8 +55,8 @@ A single feed (clock button in the top bar) with an unread badge:
 Off by default; turn it on in **Settings → Friends**. A top bar button with an unread counter (no notifications):
 - **New requests**: every pending friend request with when it was sent, account age, mutual friends and mutual servers (hover to see who) and Nitro. Accept, decline or view the profile right from the card.
 - **Tags**: *New account* and *Possible bot* (a very new account with no mutual friends, no connected accounts and no Nitro).
-- **Quick filters**: All · Mutual friends · New account · Possible bot.
-- **Spam filter**: pick servers to ignore and requests from their members go to **Spam**, even if they leave the server afterwards. Optionally send possible bots to Spam too.
+- **Quick filters**: All · Mutual · New account · Bots.
+- **Spam filter**: pick servers to ignore and requests from their members go to **Spam** (right at the top of the list), even if they leave the server afterwards. Optionally send possible bots to Spam too.
 - **Bulk actions**: decline all possible bots, or everything in Spam, one per second so Discord doesn't rate-limit you.
 - **Removed you**: people who unfriended you, including while your Discord was closed.
 
