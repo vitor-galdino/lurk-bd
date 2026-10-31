@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.6.0
+ * @version 2.6.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.6.0";
+const VERSION = "2.6.1";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.6.1", items: [
+    ["improved", "Card de pedido de amizade mais organizado: idade da conta, amigos e servidores em comum com ícones. Passe o mouse para ver a data de criação da conta e quem são os amigos e servidores em comum.", "Cleaner friend request cards: account age, mutual friends and mutual servers with icons. Hover to see when the account was created and who the mutual friends and servers are."],
+    ["improved", "Quem mandou pedido estando num servidor ignorado continua no Spam mesmo depois de sair do servidor.", "People who sent a request while in an ignored server stay in Spam even after leaving it."],
+    ["fixed", "Amigos em comum ficavam em \"carregando\" quando havia muitos pedidos.", "Mutual friends got stuck on \"loading\" when there were many requests."],
+  ] },
   { version: "2.6.0", items: [
     ["new", "Amigos: um botão novo no topo mostra os pedidos de amizade pendentes e quem te removeu da lista de amigos, com contador de novidades. Vem desligado; ative em Ajustes › Amigos.", "Friends: a new top bar button shows pending friend requests and who removed you as a friend, with an unread counter. It's off by default; turn it on in Settings › Friends."],
     ["new", "Cada pedido mostra há quanto tempo foi enviado, a idade da conta, amigos e servidores em comum, Nitro e as etiquetas \"Conta nova\" e \"Possível bot\".", "Each request shows when it was sent, the account's age, mutual friends and servers, Nitro, and \"New account\" and \"Possible bot\" tags."],
@@ -1671,7 +1676,7 @@ const markRemovedSeen = () => { Data.save(k("removedSeen"), Date.now()); updateF
 const getRemovedFriends = () => Data.load(k("removedFriends")) || [];
 function saveRemovedFriends(list) { Data.save(k("removedFriends"), list.slice(0, 1000)); friendsBus.emit(); updateFriendsBadge(); }
 const getSpamGuilds = () => Data.load(k("spamGuilds")) || [];
-function saveSpamGuilds(list) { Data.save(k("spamGuilds"), list); friendsBus.emit(); updateFriendsBadge(); }
+function saveSpamGuilds(list) { Data.save(k("spamGuilds"), list); safe(() => pruneSpamSticky(pendingRequestIds())); friendsBus.emit(); updateFriendsBadge(); }
 const getFriendSnapshot = () => Data.load(k("friendSnapshot")) || null;
 const saveFriendSnapshot = (o) => Data.save(k("friendSnapshot"), o);
 const reqFirstSeen = new Map();
@@ -1686,29 +1691,59 @@ function requestSentAt(id) {
   if (!reqFirstSeen.has(id)) reqFirstSeen.set(id, Date.now());
   return reqFirstSeen.get(id);
 }
-const profileInfo = new Map();
+const PROFILE_TTL = 7 * DAY;
+let profileCache = null;
+const getProfileCache = () => (profileCache ??= Data.load(k("reqProfiles")) || {});
+let profileSaveTimer = null;
+function saveProfileCacheSoon() { clearTimeout(profileSaveTimer); profileSaveTimer = setTimeout(() => Data.save(k("reqProfiles"), getProfileCache()), 2000); }
 const profileQueue = [];
+const profileFails = new Map();
 let profileBusy = false;
+let profilePauseUntil = 0;
 function queueProfile(id) {
-  const cur = profileInfo.get(id);
-  if (cur && Date.now() - cur.at < 30 * 60000) return;
-  if (profileQueue.includes(id)) return;
+  const cur = getProfileCache()[id];
+  if (cur && Date.now() - cur.at < PROFILE_TTL) return;
+  if ((profileFails.get(id) || 0) >= 3 || profileQueue.includes(id)) return;
   profileQueue.push(id);
   runProfileQueue();
 }
 async function runProfileQueue() {
-  if (profileBusy) return;
+  if (profileBusy || !ProfileActions) return;
   profileBusy = true;
   while (profileQueue.length) {
+    const wait = profilePauseUntil - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     const id = profileQueue.shift();
-    try { await ProfileActions?.fetchProfile?.(id, { withMutualGuilds: true, withMutualFriends: true }); } catch {}
-    profileInfo.set(id, readProfile(id));
-    friendsBus.emit();
-    updateFriendsBadge();
-    await new Promise((r) => setTimeout(r, 1200));
+    try {
+      await ProfileActions.fetchProfile(id, { withMutualGuilds: true, withMutualFriends: true });
+      getProfileCache()[id] = readProfile(id);
+      saveProfileCacheSoon();
+      friendsBus.emit();
+      updateFriendsBadge();
+    } catch (e) {
+      const status = e?.status || e?.statusCode;
+      if (status === 429) {
+        const retry = Number(e?.body?.retry_after || e?.retry_after) || 30;
+        profilePauseUntil = Date.now() + retry * 1000 + 1000;
+        profileQueue.unshift(id);
+      } else {
+        profileFails.set(id, (profileFails.get(id) || 0) + 1);
+        if ((profileFails.get(id) || 0) >= 3) { getProfileCache()[id] = { ...readProfile(id), failed: true }; friendsBus.emit(); }
+        else profileQueue.push(id);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 2000));
   }
   profileBusy = false;
 }
+function pruneProfileCache(ids) {
+  const keep = new Set(ids);
+  const c = getProfileCache();
+  let changed = false;
+  for (const id of Object.keys(c)) if (!keep.has(id)) { delete c[id]; changed = true; }
+  if (changed) saveProfileCacheSoon();
+}
+const userLabel = (x) => { const u = x?.user || x; return u?.globalName || u?.global_name || u?.username || null; };
 function readProfile(id) {
   const prof = safe(() => UserProfileStore?.getUserProfile?.(id)) || {};
   const friends = safe(() => UserProfileStore?.getMutualFriends?.(id));
@@ -1718,12 +1753,35 @@ function readProfile(id) {
   const nitroBadge = badges.find((b) => /premium|nitro/i.test(`${b.id || ""} ${b.description || ""}`)) || null;
   const nitro = !!(prof.premiumType || prof.premiumSince || prof.premium_type || nitroBadge);
   const connections = (prof.connectedAccounts || prof.connected_accounts || []).length;
-  return { at: Date.now(), loaded: !!Object.keys(prof).length, mutualFriends: Number.isFinite(friendsCount) ? friendsCount : null, mutualGuilds: guilds, nitro, nitroIcon: nitroBadge?.icon ? `https://cdn.discordapp.com/badge-icons/${nitroBadge.icon}.png` : null, nitroTitle: nitroBadge?.description || "Nitro", connections };
+  return {
+    at: Date.now(), loaded: true,
+    mutualFriends: Number.isFinite(friendsCount) ? friendsCount : null,
+    friendNames: Array.isArray(friends) ? friends.map(userLabel).filter(Boolean).slice(0, 30) : [],
+    mutualGuilds: guilds, nitro, connections,
+    nitroIcon: nitroBadge?.icon ? `https://cdn.discordapp.com/badge-icons/${nitroBadge.icon}.png` : null, nitroTitle: nitroBadge?.description || "Nitro",
+  };
+}
+const getSpamSticky = () => Data.load(k("spamSticky")) || {};
+function stickSpam(id, guildId) {
+  const st = getSpamSticky();
+  if (st[id] === guildId) return;
+  st[id] = guildId;
+  Data.save(k("spamSticky"), st);
+}
+function pruneSpamSticky(pendingIds) {
+  const st = getSpamSticky();
+  const keep = new Set(pendingIds);
+  const ignored = getSpamGuilds();
+  let changed = false;
+  for (const id of Object.keys(st)) if (!keep.has(id) || !ignored.includes(st[id])) { delete st[id]; changed = true; }
+  if (changed) Data.save(k("spamSticky"), st);
 }
 function requestInfo(id) {
   const u = UserStore?.getUser?.(id);
   const pend = getPendingReqs()[id] || {};
-  const prof = profileInfo.get(id) || { mutualGuilds: mutualGuildIds(id), mutualFriends: null, nitro: false, connections: 0, loaded: false };
+  const cached = getProfileCache()[id];
+  const liveGuilds = mutualGuildIds(id);
+  const prof = cached ? { ...cached, mutualGuilds: [...new Set([...(cached.mutualGuilds || []), ...liveGuilds])] } : { mutualGuilds: liveGuilds, mutualFriends: null, friendNames: [], nitro: false, connections: 0, loaded: false };
   const created = accountCreatedAt(id);
   const ageDays = created ? (Date.now() - created) / DAY : null;
   const s = getSettings();
@@ -1731,8 +1789,11 @@ function requestInfo(id) {
   const bot = prof.loaded && ageDays != null && ageDays <= Number(s.friendsBotDays) && !normalSignal;
   const fresh = ageDays != null && ageDays <= Number(s.friendsNewDays);
   const ignored = getSpamGuilds();
-  const spamGuild = prof.mutualGuilds.find((g) => ignored.includes(g)) || null;
-  const spam = spamGuild ? { why: "guild", guildId: spamGuild } : bot && s.spamHideBots ? { why: "bot" } : null;
+  let spamGuild = liveGuilds.find((g) => ignored.includes(g)) || prof.mutualGuilds.find((g) => ignored.includes(g)) || null;
+  let left = false;
+  if (spamGuild) stickSpam(id, spamGuild);
+  else { const st = getSpamSticky()[id]; if (st && ignored.includes(st)) { spamGuild = st; left = true; } }
+  const spam = spamGuild ? { why: "guild", guildId: spamGuild, left } : bot && s.spamHideBots ? { why: "bot" } : null;
   return {
     id, sentAt: requestSentAt(id), created, ageDays, bot, fresh, spam, prof,
     name: u?.globalName || u?.global_name || pend.globalName || u?.username || pend.username || id,
@@ -1822,7 +1883,8 @@ function openProfile(id) {
 function initFriends() {
   if (!getSettings().friendsEnabled) return;
   checkRemovedWhileAway();
-  for (const id of pendingRequestIds()) queueProfile(id);
+  const ids = pendingRequestIds();
+  if (ids.length) { pruneProfileCache(ids); pruneSpamSticky(ids); }
   updateFriendsBadge();
 }
 
@@ -2717,29 +2779,65 @@ function RequestActions({ r }) {
     h("button", { className: "dmtt-frbtn", disabled: !!busy, onClick: () => act(false) }, busy === "decline" ? L("Recusando…", "Declining…") : L("Recusar", "Decline")),
     h("button", { className: "dmtt-frbtn is-plain", onClick: () => openProfile(r.id) }, UserProfileModal ? L("Ver perfil", "View profile") : L("Abrir conversa", "Open DM")));
 }
+function HoverInfo({ content, children, className }) {
+  const [pos, setPos] = React.useState(null);
+  const ref = React.useRef(null);
+  const show = () => { const r = ref.current?.getBoundingClientRect(); if (r) setPos({ x: r.left + r.width / 2, y: r.top, b: r.bottom }); };
+  const portal = ReactDOMClient?.createPortal || BdApi.ReactDOM?.createPortal;
+  const pop = pos && content ? h("div", { className: "dmtt-hover", style: pos.y > 160 ? { left: pos.x, top: pos.y - 8, transform: "translate(-50%, -100%)" } : { left: pos.x, top: pos.b + 8, transform: "translateX(-50%)" } }, content) : null;
+  return h("span", { ref, className: `dmtt-hover-anchor ${className || ""}`, onMouseEnter: show, onMouseLeave: () => setPos(null) }, children, pop && portal ? portal(pop, document.body) : null);
+}
+function HoverList({ title, items, empty }) {
+  const shown = items.slice(0, 12);
+  return h("div", null,
+    h("div", { className: "dmtt-hover-title" }, title),
+    shown.length ? shown.map((x, i) => h("div", { key: i, className: "dmtt-hover-item" }, x)) : h("div", { className: "dmtt-hover-item is-muted" }, empty),
+    items.length > shown.length ? h("div", { className: "dmtt-hover-item is-muted" }, L(`e mais ${items.length - shown.length}`, `and ${items.length - shown.length} more`)) : null);
+}
+const FR_ICONS = {
+  age: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
+  friends: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M22 21v-1a6 6 0 0 0-4-5.6",
+  servers: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01",
+};
+function FactChip({ icon, value, hover, muted }) {
+  return h(HoverInfo, { content: hover, className: `dmtt-chip ${muted ? "is-muted" : ""}` }, h(SIcon, { d: icon, size: 13 }), h("span", null, value));
+}
 function RequestRow({ r, isNew, showSpamWhy }) {
   useTicker(30000);
   const flash = useFlash(isNew);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver !== "function") { queueProfile(r.id); return; }
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { queueProfile(r.id); io.disconnect(); } });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [r.id]);
   const p = r.prof;
+  const guildName = (gid) => safe(() => GuildStore?.getGuild?.(gid)?.name) || gid;
   const mf = p.mutualFriends;
-  const mg = p.mutualGuilds.length;
-  const facts = [
-    r.created ? L(`Conta de ${fmtAge(Date.now() - r.created)}`, `Account age: ${fmtAge(Date.now() - r.created)}`) : null,
-    mf == null ? (p.loaded ? null : L("carregando amigos…", "loading friends…")) : mf ? L(`${mf} ${plural(mf, "amigo", "amigos")} em comum`, `${mf} mutual ${plural(mf, "friend", "friends")}`) : L("nenhum amigo em comum", "no mutual friends"),
-    mg ? L(`${mg} ${plural(mg, "servidor", "servidores")} em comum`, `${mg} mutual ${plural(mg, "server", "servers")}`) : L("nenhum servidor em comum", "no mutual servers"),
-  ];
-  const why = showSpamWhy && r.spam ? (r.spam.why === "guild" ? L(`Servidor ignorado: ${safe(() => GuildStore?.getGuild?.(r.spam.guildId)?.name) || r.spam.guildId}`, `Ignored server: ${safe(() => GuildStore?.getGuild?.(r.spam.guildId)?.name) || r.spam.guildId}`) : L("Possível bot", "Possible bot")) : null;
-  return h("div", { className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}` },
-    h(Avatar, { userId: r.id, url: r.avatarURL, size: 36 }),
+  const mg = p.mutualGuilds;
+  const pending = !p.loaded;
+  const created = r.created ? new Date(r.created).toLocaleDateString(dateLocale(), { day: "2-digit", month: "long", year: "numeric" }) : null;
+  const sent = new Date(r.sentAt).toLocaleString(dateLocale(), { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const spamTag = showSpamWhy && r.spam?.why === "guild" ? L(`Servidor ignorado: ${guildName(r.spam.guildId)}${r.spam.left ? " (saiu)" : ""}`, `Ignored server: ${guildName(r.spam.guildId)}${r.spam.left ? " (left)" : ""}`) : null;
+  return h("div", { ref, className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}` },
+    h(Avatar, { userId: r.id, url: r.avatarURL, size: 40 }),
     h("span", { className: "dmtt-row-main" },
-      h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, r.name, h(NitroMark, { prof: p }), r.username ? h("span", { className: "dmtt-fr-user" }, `@${r.username}`) : null),
-      h("span", { className: "dmtt-row-sub" }, joinNodes(facts)),
-      (r.bot || r.fresh || why) ? h("span", { className: "dmtt-fr-tags" },
+      h("span", { className: "dmtt-fr-head" },
+        h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, r.name, h(NitroMark, { prof: p }), r.username ? h("span", { className: "dmtt-fr-user" }, `@${r.username}`) : null),
+        h(HoverInfo, { content: L(`Pedido enviado em ${sent}`, `Request sent on ${sent}`), className: "dmtt-fr-time" }, fmtAgo(r.sentAt))),
+      h("span", { className: "dmtt-chips" },
+        r.created ? h(FactChip, { icon: FR_ICONS.age, value: fmtAge(Date.now() - r.created), hover: L(`Conta criada em ${created}`, `Account created on ${created}`) }) : null,
+        h(FactChip, { icon: FR_ICONS.friends, value: pending ? "…" : mf == null ? "—" : String(mf), muted: pending || !mf,
+          hover: pending ? L("Carregando amigos em comum…", "Loading mutual friends…") : h(HoverList, { title: L("Amigos em comum", "Mutual friends"), items: p.friendNames || [], empty: mf == null ? L("Não foi possível carregar", "Couldn't load") : L("Nenhum", "None") }) }),
+        h(FactChip, { icon: FR_ICONS.servers, value: String(mg.length), muted: !mg.length,
+          hover: h(HoverList, { title: L("Servidores em comum", "Mutual servers"), items: mg.map(guildName), empty: L("Nenhum", "None") }) })),
+      (r.bot || r.fresh || spamTag) ? h("span", { className: "dmtt-fr-tags" },
         r.bot ? h("span", { className: "dmtt-tag is-red" }, L("Possível bot", "Possible bot")) : null,
         r.fresh ? h("span", { className: "dmtt-tag is-orange" }, L("Conta nova", "New account")) : null,
-        why && r.spam.why === "guild" ? h("span", { className: "dmtt-tag" }, why) : null) : null,
-      h(RequestActions, { r })),
-    h("span", { className: "dmtt-row-time dmtt-fr-time", title: fmtDate(r.sentAt) }, fmtAgo(r.sentAt)));
+        spamTag ? h("span", { className: "dmtt-tag" }, spamTag) : null) : null,
+      h(RequestActions, { r })));
 }
 function RemovedRow({ r, isNew }) {
   useTicker(30000);
@@ -2803,7 +2901,7 @@ function SpamFilterScreen() {
     h(LargeTitle, { title: NAMES.spamFilter(), subtitle: L("O que cair aqui vai para Spam em vez de aparecer nos novos pedidos", "Anything caught here goes to Spam instead of New requests") }),
     h(Group, { header: L("Possíveis bots", "Possible bots"), footer: L(`Conta com até ${getSettings().friendsBotDays} dias, sem amigos em comum, sem contas conectadas e sem Nitro.`, `Account up to ${getSettings().friendsBotDays} days old, with no mutual friends, no connected accounts and no Nitro.`) },
       h(SettingRow, { item: sw("spamHideBots", L("Mandar possíveis bots para Spam", "Move possible bots to Spam")) })),
-    h(Group, { header: L(`Servidores ignorados${selected.length ? ` (${selected.length})` : ""}`, `Ignored servers${selected.length ? ` (${selected.length})` : ""}`), footer: L("Pedidos de quem está nesses servidores vão para Spam.", "Requests from people in these servers go to Spam.") },
+    h(Group, { header: L(`Servidores ignorados${selected.length ? ` (${selected.length})` : ""}`, `Ignored servers${selected.length ? ` (${selected.length})` : ""}`), footer: L("Pedidos de quem está nesses servidores vão para Spam. Se a pessoa sair do servidor depois de mandar o pedido, ela continua no Spam.", "Requests from people in these servers go to Spam. If they leave the server after sending the request, they stay in Spam.") },
       h("div", { className: "dmtt-row dmtt-row-search" }, h(Search, { value: q, onChange: setQ, placeholder: L("Buscar servidor pelo nome", "Search servers by name") })),
       list.slice(0, 200).map((g) => h("button", { key: g.id, className: "dmtt-row", onClick: () => toggle(g.id) },
         iconOf(g) ? h("img", { className: "dmtt-guild-ic", src: iconOf(g), alt: "" }) : h("span", { className: "dmtt-guild-ic is-text" }, (g.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 3)),
@@ -4070,7 +4168,20 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-frbtn:disabled { opacity: .5; cursor: default; }
 .dmtt-frbtn.is-primary { background: #0a84ff; color: #fff; }
 .dmtt-frbtn.is-plain { background: transparent; color: #0a84ff; padding: 0 6px; }
-.dmtt-fr-time { align-self: flex-start; margin-top: 2px; }
+.dmtt-fr { align-items: flex-start; }
+.dmtt-fr .dmtt-av { margin-top: 2px; }
+.dmtt-fr-head { display: flex; align-items: baseline; gap: 8px; }
+.dmtt-fr-head .dmtt-fr-name { flex: 1; min-width: 0; }
+.dmtt-fr-time { flex: none; font-size: 12px; color: var(--text-muted); cursor: default; }
+.dmtt-chips { display: flex; justify-content: flex-start; align-self: stretch; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.dmtt-fr-tags, .dmtt-fr-actions { align-self: stretch; justify-content: flex-start; }
+.dmtt-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 11px; background: var(--c-fill2, rgba(120,120,128,.2)); color: var(--c-text, var(--text-default)); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; cursor: default; }
+.dmtt-chip svg { opacity: .7; }
+.dmtt-chip.is-muted { color: var(--text-muted); }
+.dmtt-hover { position: fixed; z-index: 10000; max-width: 260px; padding: 8px 10px; border-radius: 10px; background: rgba(28, 28, 30, .96); color: #f2f2f7; font-size: 12px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,.35); pointer-events: none; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); font-family: var(--font-primary, inherit); }
+.dmtt-hover-title { font-weight: 600; margin-bottom: 3px; }
+.dmtt-hover-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dmtt-hover-item.is-muted { color: #98989f; }
 .dmtt-fr-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .dmtt-nitro-img { width: 16px; height: 16px; }
 .dmtt-tag.is-orange { background: rgba(255, 159, 10, .16); color: #ff9f0a; }
