@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.7.0
+ * @version 2.7.2
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.7.0";
+const VERSION = "2.7.2";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,25 +21,21 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.7.2", items: [
+    ["improved", "Ao aceitar o pedido de alguém sem amigos em comum, o Lurk pede confirmação, igual ao Discord.", "Accepting a request from someone with no mutual friends asks for confirmation, just like Discord."],
+    ["improved", "Mensagens de erro mais claras.", "Clearer error messages."],
+  ] },
   { version: "2.7.0", items: [
     ["new", "Histórico VIP › Perfil: registra quando um VIP muda o nome, o @ ou a foto.", "VIP history › Profile: logs when a VIP changes their name, username or avatar."],
     ["new", "Monitorar perfil: escolha um VIP e o Lurk confere a cada 15 minutos as contas conectadas, a bio, os pronomes e o banner dele.", "Watch profile: pick one VIP and Lurk checks their connected accounts, bio, pronouns and banner every 15 minutes."],
     ["new", "Pedidos de amizade: filtros rápidos (Amigos em comum, Conta nova, Possível bot) e recusar todos os possíveis bots ou todo o Spam de uma vez.", "Friend requests: quick filters (Mutual friends, New account, Possible bot) and decline all possible bots or all of Spam at once."],
   ] },
-  { version: "2.6.2", items: [
-    ["fixed", "Servidores em comum, amigos em comum e Nitro dos pedidos de amizade não carregavam.", "Mutual servers, mutual friends and Nitro on friend requests didn't load."],
-    ["improved", "O modal do Lurk agora fecha pelo X no canto superior direito.", "The Lurk window now closes with the X in the top right corner."],
-    ["fixed", "A barra de rolagem branca do sistema foi trocada pela do Discord.", "The white system scrollbar was replaced with Discord's own."],
-  ] },
-  { version: "2.6.1", items: [
-    ["improved", "Card de pedido de amizade mais organizado: idade da conta, amigos e servidores em comum com ícones. Passe o mouse para ver a data de criação da conta e quem são os amigos e servidores em comum.", "Cleaner friend request cards: account age, mutual friends and mutual servers with icons. Hover to see when the account was created and who the mutual friends and servers are."],
-    ["improved", "Quem mandou pedido estando num servidor ignorado continua no Spam mesmo depois de sair do servidor.", "People who sent a request while in an ignored server stay in Spam even after leaving it."],
-    ["fixed", "Amigos em comum ficavam em \"carregando\" quando havia muitos pedidos.", "Mutual friends got stuck on \"loading\" when there were many requests."],
-  ] },
   { version: "2.6.0", items: [
     ["new", "Amigos: um botão novo no topo mostra os pedidos de amizade pendentes e quem te removeu da lista de amigos, com contador de novidades. Vem desligado; ative em Ajustes › Amigos.", "Friends: a new top bar button shows pending friend requests and who removed you as a friend, with an unread counter. It's off by default; turn it on in Settings › Friends."],
-    ["new", "Cada pedido mostra há quanto tempo foi enviado, a idade da conta, amigos e servidores em comum, Nitro e as etiquetas \"Conta nova\" e \"Possível bot\".", "Each request shows when it was sent, the account's age, mutual friends and servers, Nitro, and \"New account\" and \"Possible bot\" tags."],
-    ["new", "Filtro anti-spam: ignore servidores para mandar os pedidos de quem está neles para Spam, e opcionalmente os possíveis bots também.", "Spam filter: ignore servers to send requests from their members to Spam, and optionally possible bots too."],
+    ["new", "Cada pedido mostra há quanto tempo foi enviado, a idade da conta, amigos e servidores em comum (passe o mouse para ver quem são), Nitro e as etiquetas \"Conta nova\" e \"Possível bot\". Dá para aceitar, recusar e ver o perfil direto do card.", "Each request shows when it was sent, the account's age, mutual friends and servers (hover to see who), Nitro, and \"New account\" and \"Possible bot\" tags. Accept, decline or view the profile right from the card."],
+    ["new", "Filtro anti-spam: ignore servidores para mandar os pedidos de quem está neles para Spam (mesmo se a pessoa sair do servidor depois), e opcionalmente os possíveis bots também.", "Spam filter: ignore servers to send requests from their members to Spam (even if they leave the server later), and optionally possible bots too."],
+    ["improved", "O Lurk agora fecha pelo X azul no canto superior direito.", "Lurk now closes with the blue X in the top right corner."],
+    ["fixed", "A barra de rolagem branca do sistema foi trocada pela do Discord.", "The white system scrollbar was replaced with Discord's own."],
   ] },
   { version: "2.5.0", items: [
     ["new", "Arquivo morto: quando as mensagens dos VIPs passam do limite, as mais antigas vão para a pasta LurkArchives em vez de serem apagadas. Veja em Histórico VIP › Mensagens antigas.", "Archive: when VIP messages go over the limit, the oldest ones move to the LurkArchives folder instead of being deleted. See VIP history › Old messages."],
@@ -92,9 +88,15 @@ const transitionTo = safe(() =>
   || Webpack.getModule((m) => typeof m?.transitionTo === "function")?.transitionTo);
 const PrivateChannelActions = safe(() => Webpack.getModule((m) => typeof m?.openPrivateChannel === "function"));
 const RelationshipActions = safe(() => Webpack.getModule((m) => typeof m?.removeRelationship === "function" && typeof m?.addRelationship === "function"));
-const ProfileActions = safe(() => Webpack.getModule((m) => typeof m?.fetchProfile === "function"));
-const UserProfileModal = safe(() => Webpack.getModule((m) => typeof m?.openUserProfileModal === "function"));
-const RestAPI = safe(() => Webpack.getModule((m) => typeof m?.get === "function" && typeof m?.getAPIBaseURL === "function")) || safe(() => Webpack.getByKeys("getAPIBaseURL", "get"));
+const byStringsExport = (...str) => safe(() => Webpack.getModule(Webpack.Filters.byStrings(...str), { searchExports: true }));
+const ProfileActions = safe(() => Webpack.getModule((m) => typeof m?.fetchProfile === "function"))
+  || (() => { const fn = byStringsExport("USER_PROFILE_FETCH_START"); return typeof fn === "function" ? { fetchProfile: fn, via: "strings" } : null; })();
+const UserProfileModal = safe(() => Webpack.getModule((m) => typeof m?.openUserProfileModal === "function"))
+  || (() => { const fn = byStringsExport("USER_PROFILE_MODAL_OPEN"); return typeof fn === "function" ? { openUserProfileModal: fn, via: "strings" } : null; })();
+const isRest = (m) => !!m && typeof m === "object" && typeof m.get === "function" && typeof m.post === "function" && typeof m.put === "function" && typeof m.del === "function" && typeof m.patch === "function";
+const RestAPI = safe(() => Webpack.getModule((m) => typeof m?.get === "function" && typeof m?.getAPIBaseURL === "function"))
+  || safe(() => Webpack.getModule(isRest, { searchExports: true }))
+  || safe(() => Webpack.getModule((m) => isRest(m?.HTTP))?.HTTP);
 const UserFetcher = safe(() => Webpack.getModule((m) => typeof m?.getUser === "function" && typeof m?.fetchCurrentUser === "function"));
 const GatewayModule = safe(() => Webpack.getByKeys("getSocket"));
 
@@ -288,7 +290,7 @@ async function checkForUpdate(manual = false) {
     if (manual) toast(L(`Atualizando para o Lurk ${remote}…`, `Updating to Lurk ${remote}…`), { type: "success" });
   } catch (e) {
     updater.error = String(e?.message || e);
-    if (manual) toast(L(`Não consegui procurar atualização: ${updater.error}`, `Couldn't check for updates: ${updater.error}`), { type: "error" });
+    if (manual) toast(L(`Não foi possível procurar atualização: ${updater.error}`, `Couldn't check for updates: ${updater.error}`), { type: "error" });
   } finally { updater.checking = false; updateBus.emit(); }
 }
 function changesSince(from) {
@@ -688,7 +690,7 @@ function openDM(channelId, userId, isGroup) {
     }
     if (channelId && transitionTo) return transitionTo(`/channels/@me/${channelId}`);
   } catch (e) { Logger.error(e); }
-  toast(L("Não consegui abrir a DM.", "Couldn't open the DM."), { type: "error" });
+  toast(L("Não foi possível abrir a conversa.", "Couldn't open the DM."), { type: "error" });
 }
 function jumpTo(guildId, channelId, messageId) {
   try { if (transitionTo) return transitionTo(`/channels/${guildId || "@me"}/${channelId}${messageId ? `/${messageId}` : ""}`); } catch (e) { Logger.error(e); }
@@ -828,7 +830,7 @@ function playSound() {
       } catch (e) {
         diag.sound = { error: String(e?.message || e), via: SoundUtils?.via || null };
         saveDiag();
-        toast(L("Não consegui tocar o som do Discord; tocando o bip.", "Couldn't play the Discord sound; playing the beep instead."), { type: "warning" });
+        toast(L("Não foi possível tocar o som do Discord; tocando o bip.", "Couldn't play the Discord sound; playing the beep instead."), { type: "warning" });
       }
     }
     if (s.soundSource === "custom") {
@@ -1708,6 +1710,7 @@ const getProfileCache = () => (profileCache ??= Data.load(k("reqProfiles")) || {
 let profileSaveTimer = null;
 function saveProfileCacheSoon() { clearTimeout(profileSaveTimer); profileSaveTimer = setTimeout(() => Data.save(k("reqProfiles"), getProfileCache()), 2000); }
 const profileQueue = [];
+let lurkAlive = false;
 const profileFails = new Map();
 let profileBusy = false;
 let profilePauseUntil = 0;
@@ -1719,9 +1722,10 @@ function queueProfile(id) {
   runProfileQueue();
 }
 async function runProfileQueue() {
-  if (profileBusy || (!RestAPI && !ProfileActions)) return;
+  if (profileBusy) return;
+  if (!RestAPI && !ProfileActions) { diag.profileQueue = "no profile module"; saveDiag(); return; }
   profileBusy = true;
-  while (profileQueue.length) {
+  while (profileQueue.length && lurkAlive) {
     const wait = profilePauseUntil - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     const id = profileQueue.shift();
@@ -1744,6 +1748,7 @@ async function runProfileQueue() {
     }
     await new Promise((r) => setTimeout(r, 2000));
   }
+  if (!lurkAlive) profileQueue.length = 0;
   profileBusy = false;
 }
 function pruneProfileCache(ids) {
@@ -1914,17 +1919,38 @@ function onFriendAdded(action) {
     updateFriendsBadge();
   } catch (e) { Logger.error("friend added", e); }
 }
-async function respondRequest(id, accept) {
-  const A = RelationshipActions;
-  if (!A) throw new Error("RelationshipActions");
-  if (accept) {
-    if (typeof A.acceptFriendRequest === "function") return await A.acceptFriendRequest({ userId: id, context: { location: "Friends" } });
-    const src = String(A.addRelationship);
-    return await (/userId/.test(src) ? A.addRelationship({ userId: id, context: { location: "Friends" } }) : A.addRelationship(id, { location: "Friends" }));
+const errInfo = (e) => ({ status: e?.status || e?.statusCode || null, code: e?.body?.code ?? e?.code ?? null, message: String(e?.body?.message || e?.message || e).slice(0, 160), captcha: !!(e?.body?.captcha_key || e?.body?.captcha_sitekey) });
+async function respondRequest(id, accept, confirmStranger) {
+  const A = RelationshipActions || {};
+  const ctx = { location: "Friends" };
+  const headers = { "X-Context-Properties": safe(() => btoa(JSON.stringify(ctx))) || "" };
+  const tries = accept ? [
+    ["rest.put", RestAPI && (() => RestAPI.put({ url: `/users/@me/relationships/${id}`, body: confirmStranger ? { confirm_stranger_request: true } : {}, headers, oldFormErrors: true }))],
+    ["acceptFriendRequest", !RestAPI && typeof A.acceptFriendRequest === "function" && (() => A.acceptFriendRequest({ userId: id, context: ctx }))],
+  ] : [
+    ["cancelFriendRequest", typeof A.cancelFriendRequest === "function" && (() => A.cancelFriendRequest(id, ctx))],
+    ["removeRelationship", typeof A.removeRelationship === "function" && (() => A.removeRelationship(id, ctx))],
+    ["rest.del", RestAPI && (() => RestAPI.del({ url: `/users/@me/relationships/${id}`, headers, oldFormErrors: true }))],
+  ];
+  if (!accept) declinedByMe.set(id, Date.now());
+  const errors = [];
+  for (const [how, fn] of tries) {
+    if (!fn) continue;
+    try {
+      await fn();
+      safe(() => Data.save("diagFriendAction", { version: VERSION, at: new Date().toISOString(), accept, ok: how, errors }));
+      return how;
+    } catch (e) {
+      const info = errInfo(e);
+      errors.push({ how, ...info });
+      if (info.status === 429 || info.captcha || info.code === 80013) break;
+    }
   }
-  declinedByMe.set(id, Date.now());
-  if (typeof A.cancelFriendRequest === "function") return await A.cancelFriendRequest(id, { location: "Friends" });
-  return await A.removeRelationship(id, { location: "Friends" });
+  safe(() => Data.save("diagFriendAction", { version: VERSION, at: new Date().toISOString(), accept, ok: null, errors }));
+  const last = errors[errors.length - 1] || {};
+  const err = new Error(last.message || "no method");
+  err.status = last.status; err.captcha = errors.some((x) => x.captcha); err.stranger = errors.some((x) => x.code === 80013);
+  throw err;
 }
 function openProfile(id) {
   try {
@@ -1938,7 +1964,7 @@ async function bulkDecline(ids, kind) {
   Object.assign(bulk, { running: true, kind, done: 0, total: ids.length, failed: 0, cancel: false });
   friendsBus.emit();
   for (const id of ids) {
-    if (bulk.cancel) break;
+    if (bulk.cancel || !lurkAlive) break;
     try { await respondRequest(id, false); }
     catch (e) {
       const status = e?.status || e?.statusCode;
@@ -2608,7 +2634,7 @@ function App({ initial, onClose }) {
         prev ? h("button", { className: "dmtt-back", onClick: nav.pop }, h(Icon, { d: ICON_BACK, size: 18 }), h("span", null, screenTitle(prev))) : h("span", { className: "dmtt-brand" }, h(SIcon, { d: LURK_ICON(), size: 15 }), "Lurk"),
         h("span", { className: "dmtt-navbar-spacer" }),
         top.type !== "settings" && top.type !== "settingsPage" ? h("button", { className: "dmtt-nav-icon", title: NAMES.settings(), onClick: () => nav.push({ type: "settings" }) }, h(SIcon, { d: SI.gear, size: 17 })) : null,
-        onClose ? h("button", { className: "dmtt-close", title: L("Fechar", "Close"), "aria-label": L("Fechar", "Close"), onClick: onClose }, h(SIcon, { d: "M7 7l10 10M17 7L7 17", size: 13, sw: 2.4 })) : null),
+        onClose ? h("button", { className: "dmtt-close", title: L("Fechar", "Close"), "aria-label": L("Fechar", "Close"), onClick: onClose }, h(SIcon, { d: "M6 6l12 12M18 6L6 18", size: 17 })) : null),
       h("div", { className: "dmtt-body", ref: bodyRef, key: stack.length }, h(ScreenRouter, { s: top }))));
 }
 function LargeTitle({ title, subtitle, right }) {
@@ -2947,11 +2973,25 @@ function NitroMark({ prof }) {
 }
 function RequestActions({ r }) {
   const [busy, setBusy] = React.useState(null);
-  const act = async (accept) => {
+  const act = async (accept, confirmStranger) => {
     if (busy) return;
     setBusy(accept ? "accept" : "decline");
-    try { await respondRequest(r.id, accept); }
-    catch (e) { Logger.error("friend request", e); toast(accept ? L("Não consegui aceitar o pedido.", "Couldn't accept the request.") : L("Não consegui recusar o pedido.", "Couldn't decline the request."), { type: "error" }); setBusy(null); }
+    try { await respondRequest(r.id, accept, confirmStranger); }
+    catch (e) {
+      if (accept && e?.stranger && !confirmStranger) {
+        setBusy(null);
+        UI.showConfirmationModal(L("Aceitar pedido de um desconhecido?", "Accept a request from a stranger?"),
+          L(`Você não tem amigos em comum com ${r.name}. Aceitar mesmo assim?`, `You have no mutual friends with ${r.name}. Accept anyway?`),
+          { confirmText: L("Aceitar", "Accept"), cancelText: L("Cancelar", "Cancel"), onConfirm: () => act(true, true) });
+        return;
+      }
+      Logger.error("friend request", e);
+      const msg = e?.captcha ? L("O Discord pediu uma verificação. Abra o perfil da pessoa para responder ao pedido.", "Discord asked for a verification. Open the person's profile to respond to the request.")
+        : e?.status === 429 ? L("O Discord pediu para esperar um pouco. Tente de novo em instantes.", "Discord asked to wait a bit. Try again in a moment.")
+        : accept ? L("Não foi possível aceitar o pedido.", "Couldn't accept the request.") : L("Não foi possível recusar o pedido.", "Couldn't decline the request.");
+      toast(msg, { type: "error" });
+      setBusy(null);
+    }
   };
   return h("span", { className: "dmtt-fr-actions" },
     h("button", { className: "dmtt-frbtn is-primary", disabled: !!busy, onClick: () => act(true) }, busy === "accept" ? L("Aceitando…", "Accepting…") : L("Aceitar", "Accept")),
@@ -3320,7 +3360,7 @@ function ArchiveBlockScreen({ file }) {
       h("option", { value: "all" }, L("Todas as pessoas", "Everyone")),
       people.map((id) => h("option", { key: id, value: id }, nameOf(id, getVipList()[id] || {}))))) : null,
     loading ? h(Empty, { icon: "archive", title: L("Abrindo arquivo…", "Opening archive…") })
-      : failed ? h(Empty, { icon: "archive", title: L("Não consegui abrir este arquivo", "Couldn't open this archive") }, L(`Ele pode ter sido movido ou apagado da pasta ${ARCHIVE_DIR}.`, `It may have been moved or deleted from the ${ARCHIVE_DIR} folder.`))
+      : failed ? h(Empty, { icon: "archive", title: L("Não foi possível abrir este arquivo", "Couldn't open this archive") }, L(`Ele pode ter sido movido ou apagado da pasta ${ARCHIVE_DIR}.`, `It may have been moved or deleted from the ${ARCHIVE_DIR} folder.`))
       : h(MessageResults, { list: shown, limit, setLimit, emptyTitle: L("Nenhuma mensagem encontrada", "No messages found") }),
     h(Group, null, h(NavRow, { title: L("Apagar este arquivo", "Delete this archive"), danger: true, onClick: () => confirmDanger(L("Apagar arquivo", "Delete archive"), L(`As ${entry.count} mensagens de ${archivePeriod(entry)} serão apagadas do seu computador. Essa ação não pode ser desfeita.`, `The ${entry.count} messages from ${archivePeriod(entry)} will be deleted from your computer. This can't be undone.`), () => { deleteArchive(entry); nav.pop(); }) })));
 }
@@ -4458,8 +4498,8 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-newdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0a84ff; margin-right: 6px; vertical-align: 2px; }
 .dmtt-avbtn { padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%; flex: none; }
 .dmtt-app { overscroll-behavior: contain; }
-.dmtt-close { width: 28px; height: 28px; margin-left: 6px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--text-muted); cursor: pointer; flex: none; transition: background .15s, color .15s; }
-.dmtt-close:hover { color: var(--text-default, #fff); background: var(--c-fill1, rgba(120,120,128,.36)); }
+.dmtt-close { display: inline-flex; align-items: center; justify-content: center; padding: 6px; margin-left: 2px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; flex: none; }
+.dmtt-close:hover { background: var(--c-hover); }
 .dmtt-body::-webkit-scrollbar { width: 8px; }
 .dmtt-body::-webkit-scrollbar-thumb { background: var(--scrollbar-thin-thumb, rgba(255,255,255,.18)); border-radius: 4px; }
 .dmtt-body::-webkit-scrollbar-track { background: transparent; }
@@ -4483,6 +4523,7 @@ const SUBS = {
 
 module.exports = class Lurk {
   start() {
+    lurkAlive = true;
     settingsCache = null;
     historyCache = null;
     vipData.owner = null;
@@ -4521,6 +4562,8 @@ module.exports = class Lurk {
     this.onFriends = friendsBus.sub(() => safe(() => updateFriendsBadge()));
     this.friendsTimer = setTimeout(() => safe(() => initFriends()), 8000);
     UserStore?.addChangeListener?.(onUserStoreChange);
+    diag.modules = { restAPI: RestAPI ? (RestAPI.getAPIBaseURL ? "baseurl" : "http") : null, profileActions: ProfileActions ? ProfileActions.via || "props" : null, profileModal: UserProfileModal ? UserProfileModal.via || "props" : null, relationshipActions: !!RelationshipActions, userProfileStore: !!UserProfileStore };
+    saveDiag();
     this.identityTimer = setTimeout(() => safe(() => checkIdentities(true)), 10000);
     this.watchInterval = setInterval(() => safe(() => checkWatchedProfile()), 15 * 60000);
     this.watchTimer = setTimeout(() => safe(() => checkWatchedProfile()), 20000);
@@ -4581,6 +4624,8 @@ module.exports = class Lurk {
   }
 
   stop() {
+    lurkAlive = false;
+    clearTimeout(diagTimer);
     try { for (const [ev, fn] of Object.entries(SUBS)) Dispatcher?.unsubscribe(ev, fn); } catch {}
     try { PresenceStore?.removeChangeListener?.(onPresenceChange); } catch {}
     try { SelectedChannelStore?.removeChangeListener?.(this.onChannelSelect); } catch {}
