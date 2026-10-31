@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.6.2
+ * @version 2.7.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.6.2";
+const VERSION = "2.7.0";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.7.0", items: [
+    ["new", "Histórico VIP › Perfil: registra quando um VIP muda o nome, o @ ou a foto.", "VIP history › Profile: logs when a VIP changes their name, username or avatar."],
+    ["new", "Monitorar perfil: escolha um VIP e o Lurk confere a cada 15 minutos as contas conectadas, a bio, os pronomes e o banner dele.", "Watch profile: pick one VIP and Lurk checks their connected accounts, bio, pronouns and banner every 15 minutes."],
+    ["new", "Pedidos de amizade: filtros rápidos (Amigos em comum, Conta nova, Possível bot) e recusar todos os possíveis bots ou todo o Spam de uma vez.", "Friend requests: quick filters (Mutual friends, New account, Possible bot) and decline all possible bots or all of Spam at once."],
+  ] },
   { version: "2.6.2", items: [
     ["fixed", "Servidores em comum, amigos em comum e Nitro dos pedidos de amizade não carregavam.", "Mutual servers, mutual friends and Nitro on friend requests didn't load."],
     ["improved", "O modal do Lurk agora fecha pelo X no canto superior direito.", "The Lurk window now closes with the X in the top right corner."],
@@ -1784,8 +1789,10 @@ function profileFromBody(b) {
     nitro: !!(b.premium_type || b.premium_since || b.premium_guild_since || nitroBadge),
     nitroIcon: nitroBadge?.icon ? `https://cdn.discordapp.com/badge-icons/${nitroBadge.icon}.png` : null, nitroTitle: nitroBadge?.description || "Nitro",
     connections: (b.connected_accounts || []).length,
-    connected: (b.connected_accounts || []).map((c) => ({ type: c.type, name: c.name, id: c.id, verified: !!c.verified })),
-    bio: up.bio ?? b.user?.bio ?? null, pronouns: up.pronouns ?? null, banner: b.user?.banner ?? up.banner ?? null,
+    connected: Array.isArray(b.connected_accounts) ? b.connected_accounts.map((c) => ({ type: c.type, name: c.name, id: c.id, verified: !!c.verified })) : undefined,
+    bio: up.bio !== undefined ? up.bio : b.user?.bio,
+    pronouns: up.pronouns !== undefined ? up.pronouns : b.user?.pronouns,
+    banner: b.user && "banner" in b.user ? b.user.banner : up.banner,
   };
 }
 const userLabel = (x) => { const u = x?.user || x; return u?.globalName || u?.global_name || u?.username || null; };
@@ -1925,12 +1932,132 @@ function openProfile(id) {
   } catch (e) { Logger.error("profile", e); }
   openDM(null, id, false);
 }
+const bulk = { running: false, kind: null, done: 0, total: 0, failed: 0, cancel: false };
+async function bulkDecline(ids, kind) {
+  if (bulk.running || !ids.length) return;
+  Object.assign(bulk, { running: true, kind, done: 0, total: ids.length, failed: 0, cancel: false });
+  friendsBus.emit();
+  for (const id of ids) {
+    if (bulk.cancel) break;
+    try { await respondRequest(id, false); }
+    catch (e) {
+      const status = e?.status || e?.statusCode;
+      if (status === 429) { const retry = Number(e?.body?.retry_after) || 10; await new Promise((r) => setTimeout(r, retry * 1000 + 500)); try { await respondRequest(id, false); } catch { bulk.failed++; } }
+      else bulk.failed++;
+    }
+    bulk.done++;
+    friendsBus.emit();
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  const { done, failed, cancel } = bulk;
+  Object.assign(bulk, { running: false, kind: null, cancel: false });
+  friendsBus.emit();
+  toast(cancel ? L(`Parado: ${done - failed} recusados.`, `Stopped: ${done - failed} declined.`) : failed ? L(`${done - failed} recusados, ${failed} com erro.`, `${done - failed} declined, ${failed} failed.`) : L(`${done} pedidos recusados.`, `${done} requests declined.`), { type: failed ? "warning" : "success" });
+}
+function BulkProgress() {
+  useBus(friendsBus);
+  if (!bulk.running) return null;
+  const pct = bulk.total ? Math.round((bulk.done / bulk.total) * 100) : 0;
+  return h(Group, null, h("div", { className: "dmtt-row dmtt-bulk" },
+    h("span", { className: "dmtt-row-main" },
+      h("span", { className: "dmtt-row-title" }, L(`Recusando ${bulk.done} de ${bulk.total}…`, `Declining ${bulk.done} of ${bulk.total}…`)),
+      h("span", { className: "dmtt-bar" }, h("span", { style: { width: `${Math.max(3, pct)}%` } }))),
+    h("button", { className: "dmtt-link", onClick: () => { bulk.cancel = true; } }, L("Parar", "Stop"))));
+}
+function confirmBulk(ids, kind, label) {
+  confirmDanger(label, L(`Recusar ${ids.length} ${plural(ids.length, "pedido", "pedidos")}? Vai um por segundo pra não esbarrar no limite do Discord; você pode parar no meio.`, `Decline ${ids.length} ${plural(ids.length, "request", "requests")}? It goes one per second to stay within Discord's limits; you can stop midway.`), () => bulkDecline(ids, kind), L("Recusar", "Decline"));
+}
 function initFriends() {
   if (!getSettings().friendsEnabled) return;
   checkRemovedWhileAway();
   const ids = pendingRequestIds();
   if (ids.length) { pruneProfileCache(ids); pruneSpamSticky(ids); }
   updateFriendsBadge();
+}
+
+const profileBus = createBus();
+const getProfileLog = () => Data.load(k("vipProfileLog")) || [];
+function addProfileEvents(evs) {
+  if (!evs.length) return;
+  Data.save(k("vipProfileLog"), [...evs, ...getProfileLog()].slice(0, 1000));
+  profileBus.emit();
+  safe(() => updateSnipeBadge());
+}
+const getProfileSeen = () => Data.load(k("profileSeen")) || 0;
+const markProfileSeen = () => { Data.save(k("profileSeen"), Date.now()); safe(() => updateSnipeBadge()); };
+const newProfileCount = () => { const seen = getProfileSeen(); return getProfileLog().filter((e) => e.at > seen && isVip(e.userId)).length; };
+const getIdentitySnap = () => Data.load(k("vipIdentity")) || {};
+function identityOf(id) {
+  const u = UserStore?.getUser?.(id);
+  if (!u) return null;
+  return { username: u.username || null, globalName: u.globalName ?? u.global_name ?? null, avatar: u.avatar || null };
+}
+function diffIdentity(id, before, now, away) {
+  const out = [];
+  const at = Date.now();
+  if (before.globalName !== now.globalName && (before.globalName || now.globalName)) out.push({ userId: id, at, field: "name", from: before.globalName, to: now.globalName, away });
+  if (before.username !== now.username && before.username && now.username) out.push({ userId: id, at, field: "username", from: before.username, to: now.username, away });
+  if (before.avatar !== now.avatar) out.push({ userId: id, at, field: "avatar", from: before.avatar, to: now.avatar, away });
+  return out;
+}
+function checkIdentities(away) {
+  const snap = getIdentitySnap();
+  const evs = [];
+  let changed = false;
+  for (const id of Object.keys(getVipList())) {
+    const now = identityOf(id);
+    if (!now) continue;
+    const before = snap[id];
+    if (before) evs.push(...diffIdentity(id, before, now, away));
+    if (!before || before.username !== now.username || before.globalName !== now.globalName || before.avatar !== now.avatar) { snap[id] = now; changed = true; }
+  }
+  if (changed) Data.save(k("vipIdentity"), snap);
+  addProfileEvents(evs);
+}
+let identityTimer = null;
+function onUserStoreChange() {
+  if (identityTimer) return;
+  identityTimer = setTimeout(() => { identityTimer = null; safe(() => checkIdentities(false)); }, 1500);
+}
+const getProfileWatch = () => Data.load(k("profileWatch")) || null;
+function setProfileWatch(id) { Data.save(k("profileWatch"), id); profileBus.emit(); if (id) safe(() => checkWatchedProfile()); }
+const getWatchSnap = () => Data.load(k("profileWatchSnap")) || {};
+const connKey = (c) => `${c.type}:${c.id || c.name}`;
+function diffWatched(id, before, now, away) {
+  const out = [];
+  const at = Date.now();
+  for (const f of ["bio", "pronouns", "banner"]) if (now[f] !== undefined && before[f] !== undefined && (before[f] || null) !== (now[f] || null)) out.push({ userId: id, at, field: f, from: before[f] || null, to: now[f] || null, away });
+  if (!Array.isArray(now.connected) || !Array.isArray(before.connected)) return out;
+  const b = new Map((before.connected || []).map((c) => [connKey(c), c]));
+  const n = new Map((now.connected || []).map((c) => [connKey(c), c]));
+  for (const [key, c] of n) if (!b.has(key)) out.push({ userId: id, at, field: "connection", action: "added", conn: c, away });
+  for (const [key, c] of b) if (!n.has(key)) out.push({ userId: id, at, field: "connection", action: "removed", conn: c, away });
+  return out;
+}
+function applyWatchedProfile(id, prof, away) {
+  const snaps = getWatchSnap();
+  const prev = snaps[id] || {};
+  const pick = (f) => (prof[f] !== undefined ? prof[f] || null : prev[f]);
+  const now = { bio: pick("bio"), pronouns: pick("pronouns"), banner: pick("banner"), connected: Array.isArray(prof.connected) ? prof.connected : prev.connected, at: Date.now() };
+  if (snaps[id]) addProfileEvents(diffWatched(id, snaps[id], now, away));
+  snaps[id] = now;
+  Data.save(k("profileWatchSnap"), snaps);
+}
+async function checkWatchedProfile() {
+  const id = getProfileWatch();
+  if (!id || !isVip(id) || !RestAPI) return;
+  try {
+    const res = await RestAPI.get({ url: `/users/${id}/profile`, query: { with_mutual_guilds: false, with_mutual_friends: false }, oldFormErrors: true });
+    const body = res?.body || res;
+    if (body && typeof body === "object") applyWatchedProfile(id, profileFromBody(body), false);
+  } catch (e) { diag.profileWatch = `${e?.status || ""} ${e?.message || e}`.slice(0, 200); saveDiag(); }
+}
+function onProfileFetched(a) {
+  try {
+    const id = a?.user?.id;
+    if (!id || id !== getProfileWatch() || !Array.isArray(a.connected_accounts)) return;
+    applyWatchedProfile(id, profileFromBody(a), false);
+  } catch {}
 }
 
 const CALL_FILE = "LurkCalls";
@@ -2906,6 +3033,7 @@ function FriendsScreen({ tab: initialTab }) {
   const nav = useNav();
   const [seen] = React.useState(() => ({ req: getReqSeen(), rem: getRemovedSeen() }));
   const [tab, setTab] = React.useState(initialTab || "requests");
+  const [rf, setRf] = React.useState("all");
   const [opened, setOpened] = React.useState(() => new Set([initialTab || "requests"]));
   React.useEffect(() => { if (tab === "requests") markReqSeen(); else markRemovedSeen(); setOpened((o) => new Set([...o, tab])); }, [tab]);
   if (!getSettings().friendsEnabled) {
@@ -2913,7 +3041,11 @@ function FriendsScreen({ tab: initialTab }) {
       h(Group, null, h(NavRow, { icon: "personBell", color: "#34c759", title: L("Ativar Amigos", "Turn on Friends"), onClick: () => nav.push({ type: "settingsPage", id: "friends" }) })));
   }
   const all = friendRequests();
-  const shown = all.filter((r) => !r.spam);
+  const pending = all.filter((r) => !r.spam);
+  const filters = { all: () => true, mutual: (r) => (r.prof.mutualFriends || 0) > 0, fresh: (r) => r.fresh, bot: (r) => r.bot };
+  const counts = Object.fromEntries(Object.entries(filters).map(([key, f]) => [key, pending.filter(f).length]));
+  const shown = pending.filter(filters[rf] || filters.all);
+  const bots = pending.filter((r) => r.bot);
   const spam = all.filter((r) => r.spam);
   const removed = getRemovedFriends();
   const newReq = opened.has("requests") ? 0 : shown.filter((r) => r.sentAt > seen.req).length;
@@ -2924,8 +3056,12 @@ function FriendsScreen({ tab: initialTab }) {
     h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
     tab === "requests" ? h(React.Fragment, null,
       h(Group, null, h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) })),
+      h(BulkProgress),
+      pending.length ? h(Segmented, { value: rf, onChange: setRf, options: [["all", L("Todos", "All"), counts.all], ["mutual", L("Amigos em comum", "Mutual friends"), counts.mutual], ["fresh", L("Conta nova", "New account"), counts.fresh], ["bot", L("Possível bot", "Possible bot"), counts.bot]] }) : null,
       shown.length ? h(Group, { header: L(`${shown.length} ${plural(shown.length, "pedido pendente", "pedidos pendentes")}`, `${shown.length} pending ${plural(shown.length, "request", "requests")}`) }, shown.map((r) => h(RequestRow, { key: r.id, r, isNew: r.sentAt > seen.req })))
+        : pending.length ? h(Empty, { icon: "search", title: L("Nenhum pedido neste filtro", "No requests match this filter") }, rf === "mutual" || rf === "bot" ? L("Amigos em comum e possíveis bots aparecem conforme os perfis carregam, enquanto você rola a lista.", "Mutual friends and possible bots show up as profiles load while you scroll the list.") : null)
         : h(Empty, { icon: "personBell", title: L("Nenhum pedido pendente", "No pending requests") }, L("Quando alguém te mandar um pedido de amizade, aparece aqui.", "When someone sends you a friend request, it shows up here.")),
+      bots.length && !bulk.running ? h(Group, { footer: L("Só conta quem já teve o perfil carregado.", "Only counts people whose profile has loaded.") }, h(NavRow, { title: L(`Recusar todos os possíveis bots (${bots.length})`, `Decline all possible bots (${bots.length})`), danger: true, onClick: () => confirmBulk(bots.map((r) => r.id), "bots", L("Recusar possíveis bots", "Decline possible bots")) })) : null,
       spam.length ? h(Group, null, h(NavRow, { title: L(`Spam (${spam.length})`, `Spam (${spam.length})`), onClick: () => nav.push({ type: "spam" }) })) : null)
     : h(React.Fragment, null,
       removed.length ? h(Group, null, removed.map((r, i) => h(RemovedRow, { key: `${r.userId}-${r.at}-${i}`, r, isNew: r.at > seen.rem })))
@@ -2937,6 +3073,8 @@ function SpamListScreen() {
   const spam = friendRequests().filter((r) => r.spam);
   return h(React.Fragment, null,
     h(LargeTitle, { title: "Spam", subtitle: L("Pedidos pendentes escondidos pelo filtro anti-spam", "Pending requests hidden by the spam filter") }),
+    h(BulkProgress),
+    spam.length && !bulk.running ? h(Group, null, h(NavRow, { title: L(`Recusar todos (${spam.length})`, `Decline all (${spam.length})`), danger: true, onClick: () => confirmBulk(spam.map((r) => r.id), "spam", L("Recusar todo o Spam", "Decline all of Spam")) })) : null,
     spam.length ? h(Group, null, spam.map((r) => h(RequestRow, { key: r.id, r, isNew: false, showSpamWhy: true })))
       : h(Empty, { icon: "shield", title: L("Nada no spam", "Nothing in spam") }));
 }
@@ -2961,8 +3099,50 @@ function SpamFilterScreen() {
         h("span", { className: `dmtt-check ${selected.includes(g.id) ? "is-on" : ""}` }, selected.includes(g.id) ? "✓" : ""))),
       !list.length ? h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-sub" }, L("Nenhum servidor encontrado", "No servers found"))) : null));
 }
+const CONN_NAMES = { battlenet: "Battle.net", bluesky: "Bluesky", bungie: "Bungie", crunchyroll: "Crunchyroll", ebay: "eBay", epicgames: "Epic Games", facebook: "Facebook", github: "GitHub", instagram: "Instagram", leagueoflegends: "League of Legends", mastodon: "Mastodon", paypal: "PayPal", playstation: "PlayStation", reddit: "Reddit", riotgames: "Riot Games", roblox: "Roblox", spotify: "Spotify", skype: "Skype", steam: "Steam", tiktok: "TikTok", twitch: "Twitch", twitter: "X", xbox: "Xbox", youtube: "YouTube" };
+const connName = (t) => (t === "domain" ? L("Domínio", "Domain") : CONN_NAMES[t] || (t ? t.charAt(0).toUpperCase() + t.slice(1) : "?"));
+const avatarImg = (id, hash) => (hash ? `https://cdn.discordapp.com/avatars/${id}/${hash}.${String(hash).startsWith("a_") ? "gif" : "png"}?size=64` : defaultAvatar(UserStore?.getUser?.(id), id));
+const bannerImg = (id, hash) => (hash ? `https://cdn.discordapp.com/banners/${id}/${hash}.png?size=300` : null);
+function profileChangeText(e) {
+  switch (e.field) {
+    case "name": return [L("mudou o nome", "changed their name"), `${e.from || "—"} → ${e.to || "—"}`];
+    case "username": return [L("mudou o @", "changed their username"), `@${e.from} → @${e.to}`];
+    case "avatar": return [L("mudou a foto", "changed their avatar"), null];
+    case "banner": return [e.to ? L("mudou o banner", "changed their banner") : L("removeu o banner", "removed their banner"), null];
+    case "pronouns": return [L("mudou os pronomes", "changed their pronouns"), `${e.from || "—"} → ${e.to || "—"}`];
+    case "bio": return [e.to ? L("mudou a bio", "changed their bio") : L("apagou a bio", "cleared their bio"), null];
+    case "connection": return [e.action === "added" ? L(`conectou ${connName(e.conn?.type)}`, `connected ${connName(e.conn?.type)}`) : L(`removeu ${connName(e.conn?.type)}`, `removed ${connName(e.conn?.type)}`), e.conn?.name || null];
+    default: return [e.field, null];
+  }
+}
+function ProfileChangeRow({ e, isNew, showName }) {
+  const [what, detail] = profileChangeText(e);
+  const flash = useFlash(isNew);
+  return h("div", { className: `dmtt-row dmtt-fr dmtt-pc ${flash ? "is-flash" : ""}` },
+    h(Avatar, { userId: e.userId, size: 32 }),
+    h("span", { className: "dmtt-row-main" },
+      h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot" }) : null, showName ? h("b", null, nameOf(e.userId, getVipList()[e.userId] || {})) : null, h("span", { className: "dmtt-pc-what" }, what)),
+      detail ? h("span", { className: "dmtt-row-sub" }, detail) : null,
+      e.field === "avatar" ? h("span", { className: "dmtt-pc-imgs" }, h("img", { className: "dmtt-pc-av", src: avatarImg(e.userId, e.from), alt: "" }), h("span", { className: "dmtt-pc-arrow" }, "→"), h("img", { className: "dmtt-pc-av", src: avatarImg(e.userId, e.to), alt: "" })) : null,
+      e.field === "banner" ? h("span", { className: "dmtt-pc-imgs" }, e.from ? h("img", { className: "dmtt-pc-banner", src: bannerImg(e.userId, e.from), alt: "" }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner")), h("span", { className: "dmtt-pc-arrow" }, "→"), e.to ? h("img", { className: "dmtt-pc-banner", src: bannerImg(e.userId, e.to), alt: "" }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner"))) : null,
+      e.field === "bio" ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Antes: ", "Before: ")), e.from || "—"), h("div", null, h("b", null, L("Depois: ", "After: ")), e.to || "—")) : null,
+      e.away ? h("span", { className: "dmtt-row-sub" }, L("Mudou enquanto seu Discord estava fechado", "Changed while your Discord was closed")) : null),
+    h("span", { className: "dmtt-row-time", title: fmtDate(e.at) }, e.away ? L(`visto ${fmtAgo(e.at)}`, `noticed ${fmtAgo(e.at)}`) : fmtHM(e.at)));
+}
+function ProfileFeed({ userId }) {
+  useBus(profileBus, vipBus);
+  const [seen] = React.useState(getProfileSeen);
+  React.useEffect(() => { if (!userId) markProfileSeen(); }, []);
+  const list = getProfileLog().filter((e) => isVip(e.userId) && (!userId || e.userId === userId));
+  const watch = getProfileWatch();
+  const watchName = watch && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
+  return h(React.Fragment, null,
+    !userId ? h(Group, { footer: watchName ? L(`Nome, @ e foto são registrados para todos os VIPs. Contas conectadas, bio, pronomes e banner só de ${watchName}, conferido a cada 15 minutos.`, `Name, username and avatar are logged for every VIP. Connected accounts, bio, pronouns and banner only for ${watchName}, checked every 15 minutes.`) : L("Nome, @ e foto são registrados para todos os VIPs. Para ver também contas conectadas, bio, pronomes e banner, ligue \"Monitorar perfil\" no perfil de um VIP.", "Name, username and avatar are logged for every VIP. To also see connected accounts, bio, pronouns and banner, turn on \"Watch profile\" on a VIP's page.") }) : null,
+    list.length ? h(DayList, { items: list, getTime: (e) => e.at, render: (e, i) => h(ProfileChangeRow, { key: `${e.at}-${i}`, e, isNew: !userId && e.at > seen, showName: !userId }) })
+      : h(Empty, { icon: "star", title: L("Nenhuma mudança de perfil ainda", "No profile changes yet") }));
+}
 function SnipeScreen({ channelId, tab: initialTab }) {
-  useBus(vipBus, settingsBus);
+  useBus(vipBus, settingsBus, profileBus);
   const nav = useNav();
   const [tab, setTab] = React.useState(initialTab || "messages");
   const vips = Object.keys(getVipList());
@@ -2972,10 +3152,11 @@ function SnipeScreen({ channelId, tab: initialTab }) {
       h(Group, null, h(NavRow, { icon: "star", color: "#ffcc00", title: L("Abrir Lista VIP", "Open VIP list"), onClick: () => nav.push({ type: "vip" }) })));
   }
   const nChanges = newChangesCount();
+  const nProfile = newProfileCount();
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.snipe(), subtitle: L("Tudo o que seus VIPs fizeram, no privado e nos servidores", "Everything your VIPs did, in DMs and servers") }),
-    h(Segmented, { value: tab, onChange: setTab, options: [["messages", L("Mensagens", "Messages"), nChanges || null], ["status", "Status"], ["people", L("Pessoas", "People"), vips.length]] }),
-    tab === "messages" ? h(MessagesFeed, { channelId }) : tab === "status" ? h(StatusFeed) : h(VipPeopleList));
+    h(Segmented, { value: tab, onChange: setTab, options: [["messages", L("Mensagens", "Messages"), nChanges || null], ["status", "Status"], ["profile", L("Perfil", "Profile"), nProfile || null], ["people", L("Pessoas", "People"), vips.length]] }),
+    tab === "messages" ? h(MessagesFeed, { channelId }) : tab === "status" ? h(StatusFeed) : tab === "profile" ? h(ProfileFeed, null) : h(VipPeopleList));
 }
 
 function onlineMs(id, events, from) {
@@ -3465,6 +3646,21 @@ function VipAlerts({ id, toggles }) {
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
       h(Switch, { checked: vipFlag(id, f), onChange: (v) => setVip(id, { [f]: v }), label: l }))) : null);
 }
+function WatchProfileRow({ id }) {
+  useBus(profileBus);
+  const watch = getProfileWatch();
+  const on = watch === id;
+  const other = watch && watch !== id && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
+  const me = nameOf(id, getVipList()[id] || {});
+  const toggle = (v) => {
+    if (v && other) return UI.showConfirmationModal(L("Monitorar perfil", "Watch profile"), L(`Só dá pra monitorar uma pessoa por vez. Trocar ${other} por ${me}?`, `You can only watch one person at a time. Switch from ${other} to ${me}?`), { confirmText: L("Trocar", "Switch"), cancelText: L("Cancelar", "Cancel"), onConfirm: () => setProfileWatch(id) });
+    setProfileWatch(v ? id : null);
+  };
+  return h(Group, { footer: on ? L("Confere contas conectadas, bio, pronomes e banner a cada 15 minutos. Só uma pessoa por vez.", "Checks connected accounts, bio, pronouns and banner every 15 minutes. One person at a time.") : other ? L(`Agora monitorando: ${other}.`, `Now watching: ${other}.`) : L("Registra contas conectadas, bio, pronomes e banner. Só uma pessoa por vez.", "Logs connected accounts, bio, pronouns and banner. One person at a time.") },
+    h("div", { className: "dmtt-row" }, h(IconTile, { name: "eye", color: "#5e5ce6" }),
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Monitorar perfil", "Watch profile"))),
+      h(Switch, { checked: on, onChange: toggle, label: L("Monitorar perfil", "Watch profile") })));
+}
 function VipPersonScreen({ userId: id }) {
   useBus(vipBus, historyBus);
   useTicker(30000);
@@ -3487,8 +3683,10 @@ function VipPersonScreen({ userId: id }) {
       h(ActionButton, { icon: h(SIcon, { d: SI.star, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível", "invisible")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
-    h(Segmented, { value: tab, onChange: setTab, options: [["activity", L("Atividade", "Activity")], ["messages", L("Mensagens", "Messages")], ["voice", vipVoice.has(id) ? "Calls ●" : "Calls"], ["typing", L("Digitou", "Typed")]] }),
-    tab === "activity" ? h(ActivityList, { id, events: d.events })
+    h(WatchProfileRow, { id }),
+    h(Segmented, { value: tab, onChange: setTab, options: [["activity", L("Atividade", "Activity")], ["messages", L("Mensagens", "Messages")], ["voice", vipVoice.has(id) ? "Calls ●" : "Calls"], ["profile", L("Perfil", "Profile")], ["typing", L("Digitou", "Typed")]] }),
+    tab === "profile" ? h(ProfileFeed, { userId: id })
+      : tab === "activity" ? h(ActivityList, { id, events: d.events })
       : tab === "messages" ? h(MessagesList, { id, messages: d.messages })
       : tab === "voice" ? h(VoiceList, { id, sessions: d.voice || [] })
       : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }));
@@ -3871,7 +4069,7 @@ function updateBadge() {
 function updateSnipeBadge() {
   const badge = snipeBtn?.querySelector(".dmtt-toolbar-badge");
   if (!badge) return;
-  const n = getSettings().showBadge ? newChangesCount() : 0;
+  const n = getSettings().showBadge ? newChangesCount() + newProfileCount() : 0;
   badge.hidden = !n;
   badge.textContent = n > 99 ? "99+" : String(n);
 }
@@ -4220,6 +4418,14 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-fr-name .dmtt-newdot { margin-right: 0; vertical-align: 0; }
 .dmtt-fr-user { font-size: 12px; font-weight: 400; color: var(--text-muted); }
 .dmtt-fr-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.dmtt-bulk .dmtt-bar { margin-top: 6px; }
+.dmtt-pc-what { font-weight: 400; color: var(--text-muted); }
+.dmtt-pc .dmtt-fr-name b { font-weight: 600; }
+.dmtt-pc-imgs { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.dmtt-pc-av { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.dmtt-pc-banner { width: 120px; height: 42px; border-radius: 8px; object-fit: cover; }
+.dmtt-pc-none { font-size: 12px; color: var(--text-muted); }
+.dmtt-pc-arrow { color: var(--text-muted); }
 .dmtt-frbtn { height: 28px; padding: 0 14px; border-radius: 14px; border: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--c-text, #fff); transition: opacity .15s, filter .15s; }
 .dmtt-frbtn:hover:not(:disabled) { filter: brightness(1.15); }
 .dmtt-frbtn:disabled { opacity: .5; cursor: default; }
@@ -4271,6 +4477,7 @@ const SUBS = {
   MESSAGE_REACTION_ADD: onReactionAdd,
   MESSAGE_REACTION_REMOVE: onReactionRemove,
   VOICE_STATE_UPDATES: onVoiceStates,
+  USER_PROFILE_FETCH_SUCCESS: onProfileFetched,
   CONNECTION_OPEN: () => { setTimeout(subscribeVipGuilds, 3000); setTimeout(() => safe(() => initFriends()), 5000); },
 };
 
@@ -4313,6 +4520,10 @@ module.exports = class Lurk {
     this.onSettings = settingsBus.sub(() => { safe(() => syncDOM()); safe(() => updateFriendsBadge()); });
     this.onFriends = friendsBus.sub(() => safe(() => updateFriendsBadge()));
     this.friendsTimer = setTimeout(() => safe(() => initFriends()), 8000);
+    UserStore?.addChangeListener?.(onUserStoreChange);
+    this.identityTimer = setTimeout(() => safe(() => checkIdentities(true)), 10000);
+    this.watchInterval = setInterval(() => safe(() => checkWatchedProfile()), 15 * 60000);
+    this.watchTimer = setTimeout(() => safe(() => checkWatchedProfile()), 20000);
     scheduleSubscribe();
     this.subInterval = setInterval(subscribeVipGuilds, 120000);
     this.backupTimer = setTimeout(() => safe(() => runBackup(false)), 30000);
@@ -4376,6 +4587,9 @@ module.exports = class Lurk {
     try { this.onSettings?.(); } catch {}
     try { this.onFriends?.(); } catch {}
     clearTimeout(this.friendsTimer);
+    try { UserStore?.removeChangeListener?.(onUserStoreChange); } catch {}
+    clearTimeout(this.identityTimer); clearTimeout(this.watchTimer); clearInterval(this.watchInterval);
+    clearTimeout(identityTimer); identityTimer = null;
     snipeActive = false;
     if (window.__dmttSnipeHook === snipeInterceptor) window.__dmttSnipeHook = null;
     sessions.forEach((s) => clearTimeout(s.timer));
