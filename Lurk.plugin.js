@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.7.2
+ * @version 2.7.3
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.7.2";
+const VERSION = "2.7.3";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,10 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.7.3", items: [
+    ["improved", "O Spam agora fica no topo da lista de pedidos, logo abaixo do Filtro anti-spam.", "Spam now sits at the top of the request list, right below the Spam filter."],
+    ["improved", "Nomes mais curtos nos filtros dos pedidos, para caberem inteiros.", "Shorter request filter names so they fit."],
+  ] },
   { version: "2.7.2", items: [
     ["improved", "Ao aceitar o pedido de alguém sem amigos em comum, o Lurk pede confirmação, igual ao Discord.", "Accepting a request from someone with no mutual friends asks for confirmation, just like Discord."],
     ["improved", "Mensagens de erro mais claras.", "Clearer error messages."],
@@ -3095,14 +3099,16 @@ function FriendsScreen({ tab: initialTab }) {
     h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade e quem te removeu", "Friend requests and who removed you") }),
     h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
     tab === "requests" ? h(React.Fragment, null,
-      h(Group, null, h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) })),
+      h(Group, null,
+        h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) }),
+        h(NavRow, { icon: "ban", color: "#8e8e93", title: "Spam", detail: String(spam.length), onClick: () => nav.push({ type: "spam" }) })),
       h(BulkProgress),
-      pending.length ? h(Segmented, { value: rf, onChange: setRf, options: [["all", L("Todos", "All"), counts.all], ["mutual", L("Amigos em comum", "Mutual friends"), counts.mutual], ["fresh", L("Conta nova", "New account"), counts.fresh], ["bot", L("Possível bot", "Possible bot"), counts.bot]] }) : null,
+      pending.length ? h(Segmented, { value: rf, onChange: setRf, options: [["all", L("Todos", "All"), counts.all], ["mutual", L("Em comum", "Mutual"), counts.mutual], ["fresh", L("Conta nova", "New account"), counts.fresh], ["bot", "Bots", counts.bot]] }) : null,
       shown.length ? h(Group, { header: L(`${shown.length} ${plural(shown.length, "pedido pendente", "pedidos pendentes")}`, `${shown.length} pending ${plural(shown.length, "request", "requests")}`) }, shown.map((r) => h(RequestRow, { key: r.id, r, isNew: r.sentAt > seen.req })))
         : pending.length ? h(Empty, { icon: "search", title: L("Nenhum pedido neste filtro", "No requests match this filter") }, rf === "mutual" || rf === "bot" ? L("Amigos em comum e possíveis bots aparecem conforme os perfis carregam, enquanto você rola a lista.", "Mutual friends and possible bots show up as profiles load while you scroll the list.") : null)
         : h(Empty, { icon: "personBell", title: L("Nenhum pedido pendente", "No pending requests") }, L("Quando alguém te mandar um pedido de amizade, aparece aqui.", "When someone sends you a friend request, it shows up here.")),
       bots.length && !bulk.running ? h(Group, { footer: L("Só conta quem já teve o perfil carregado.", "Only counts people whose profile has loaded.") }, h(NavRow, { title: L(`Recusar todos os possíveis bots (${bots.length})`, `Decline all possible bots (${bots.length})`), danger: true, onClick: () => confirmBulk(bots.map((r) => r.id), "bots", L("Recusar possíveis bots", "Decline possible bots")) })) : null,
-      spam.length ? h(Group, null, h(NavRow, { title: L(`Spam (${spam.length})`, `Spam (${spam.length})`), onClick: () => nav.push({ type: "spam" }) })) : null)
+      null)
     : h(React.Fragment, null,
       removed.length ? h(Group, null, removed.map((r, i) => h(RemovedRow, { key: `${r.userId}-${r.at}-${i}`, r, isNew: r.at > seen.rem })))
         : h(Empty, { icon: "personBell", title: L("Ninguém te removeu", "No one removed you") }, L("Quando alguém desfizer a amizade com você, aparece aqui.", "When someone unfriends you, it shows up here.")),
