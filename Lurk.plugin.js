@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.5.0
+ * @version 2.6.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.5.0";
+const VERSION = "2.6.0";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.6.0", items: [
+    ["new", "Amigos: um botão novo no topo mostra os pedidos de amizade pendentes e quem te removeu da lista de amigos, com contador de novidades. Vem desligado; ative em Ajustes › Amigos.", "Friends: a new top bar button shows pending friend requests and who removed you as a friend, with an unread counter. It's off by default; turn it on in Settings › Friends."],
+    ["new", "Cada pedido mostra há quanto tempo foi enviado, a idade da conta, amigos e servidores em comum, Nitro e as etiquetas \"Conta nova\" e \"Possível bot\".", "Each request shows when it was sent, the account's age, mutual friends and servers, Nitro, and \"New account\" and \"Possible bot\" tags."],
+    ["new", "Filtro anti-spam: ignore servidores para mandar os pedidos de quem está neles para Spam, e opcionalmente os possíveis bots também.", "Spam filter: ignore servers to send requests from their members to Spam, and optionally possible bots too."],
+  ] },
   { version: "2.5.0", items: [
     ["new", "Arquivo morto: quando as mensagens dos VIPs passam do limite, as mais antigas vão para a pasta LurkArchives em vez de serem apagadas. Veja em Histórico VIP › Mensagens antigas.", "Archive: when VIP messages go over the limit, the oldest ones move to the LurkArchives folder instead of being deleted. See VIP history › Old messages."],
     ["new", "Busca nas mensagens dos VIPs, com opção de procurar também no arquivo morto.", "Search VIP messages, with an option to search the archive too."],
@@ -73,6 +78,7 @@ const transitionTo = safe(() =>
 const PrivateChannelActions = safe(() => Webpack.getModule((m) => typeof m?.openPrivateChannel === "function"));
 const RelationshipActions = safe(() => Webpack.getModule((m) => typeof m?.removeRelationship === "function" && typeof m?.addRelationship === "function"));
 const ProfileActions = safe(() => Webpack.getModule((m) => typeof m?.fetchProfile === "function"));
+const UserProfileModal = safe(() => Webpack.getModule((m) => typeof m?.openUserProfileModal === "function"));
 const UserFetcher = safe(() => Webpack.getModule((m) => typeof m?.getUser === "function" && typeof m?.fetchCurrentUser === "function"));
 const GatewayModule = safe(() => Webpack.getByKeys("getSocket"));
 
@@ -176,6 +182,10 @@ const DEFAULTS = {
 
   changelogMode: "ask",
 
+  friendsEnabled: false,
+  friendsNewDays: 90,
+  friendsBotDays: 30,
+  spamHideBots: false,
   showToolbarButton: true,
   showBadge: true,
 };
@@ -1651,6 +1661,171 @@ function patchRelationshipActions() {
   }
 }
 
+const friendsBus = createBus();
+const DISCORD_EPOCH = 1420070400000;
+const accountCreatedAt = (id) => { try { return Number(BigInt(id) >> 22n) + DISCORD_EPOCH; } catch { return null; } };
+const getReqSeen = () => Data.load(k("friendReqSeen")) || 0;
+const getRemovedSeen = () => Data.load(k("removedSeen")) || 0;
+const markReqSeen = () => { Data.save(k("friendReqSeen"), Date.now()); updateFriendsBadge(); };
+const markRemovedSeen = () => { Data.save(k("removedSeen"), Date.now()); updateFriendsBadge(); };
+const getRemovedFriends = () => Data.load(k("removedFriends")) || [];
+function saveRemovedFriends(list) { Data.save(k("removedFriends"), list.slice(0, 1000)); friendsBus.emit(); updateFriendsBadge(); }
+const getSpamGuilds = () => Data.load(k("spamGuilds")) || [];
+function saveSpamGuilds(list) { Data.save(k("spamGuilds"), list); friendsBus.emit(); updateFriendsBadge(); }
+const getFriendSnapshot = () => Data.load(k("friendSnapshot")) || null;
+const saveFriendSnapshot = (o) => Data.save(k("friendSnapshot"), o);
+const reqFirstSeen = new Map();
+function pendingRequestIds() {
+  return relEntries().filter(([, t]) => t === REL_PENDING_INCOMING).map(([id]) => id);
+}
+function requestSentAt(id) {
+  const since = Date.parse(safe(() => RelationshipStore?.getSince?.(id)) || "");
+  if (since) return since;
+  const p = getPendingReqs()[id];
+  if (p?.at) return p.at;
+  if (!reqFirstSeen.has(id)) reqFirstSeen.set(id, Date.now());
+  return reqFirstSeen.get(id);
+}
+const profileInfo = new Map();
+const profileQueue = [];
+let profileBusy = false;
+function queueProfile(id) {
+  const cur = profileInfo.get(id);
+  if (cur && Date.now() - cur.at < 30 * 60000) return;
+  if (profileQueue.includes(id)) return;
+  profileQueue.push(id);
+  runProfileQueue();
+}
+async function runProfileQueue() {
+  if (profileBusy) return;
+  profileBusy = true;
+  while (profileQueue.length) {
+    const id = profileQueue.shift();
+    try { await ProfileActions?.fetchProfile?.(id, { withMutualGuilds: true, withMutualFriends: true }); } catch {}
+    profileInfo.set(id, readProfile(id));
+    friendsBus.emit();
+    updateFriendsBadge();
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  profileBusy = false;
+}
+function readProfile(id) {
+  const prof = safe(() => UserProfileStore?.getUserProfile?.(id)) || {};
+  const friends = safe(() => UserProfileStore?.getMutualFriends?.(id));
+  const friendsCount = Array.isArray(friends) ? friends.length : safe(() => UserProfileStore?.getMutualFriendsCount?.(id));
+  const guilds = mutualGuildIds(id);
+  const badges = prof.badges || [];
+  const nitroBadge = badges.find((b) => /premium|nitro/i.test(`${b.id || ""} ${b.description || ""}`)) || null;
+  const nitro = !!(prof.premiumType || prof.premiumSince || prof.premium_type || nitroBadge);
+  const connections = (prof.connectedAccounts || prof.connected_accounts || []).length;
+  return { at: Date.now(), loaded: !!Object.keys(prof).length, mutualFriends: Number.isFinite(friendsCount) ? friendsCount : null, mutualGuilds: guilds, nitro, nitroIcon: nitroBadge?.icon ? `https://cdn.discordapp.com/badge-icons/${nitroBadge.icon}.png` : null, nitroTitle: nitroBadge?.description || "Nitro", connections };
+}
+function requestInfo(id) {
+  const u = UserStore?.getUser?.(id);
+  const pend = getPendingReqs()[id] || {};
+  const prof = profileInfo.get(id) || { mutualGuilds: mutualGuildIds(id), mutualFriends: null, nitro: false, connections: 0, loaded: false };
+  const created = accountCreatedAt(id);
+  const ageDays = created ? (Date.now() - created) / DAY : null;
+  const s = getSettings();
+  const normalSignal = (prof.mutualFriends || 0) > 0 || prof.connections > 0 || prof.nitro;
+  const bot = prof.loaded && ageDays != null && ageDays <= Number(s.friendsBotDays) && !normalSignal;
+  const fresh = ageDays != null && ageDays <= Number(s.friendsNewDays);
+  const ignored = getSpamGuilds();
+  const spamGuild = prof.mutualGuilds.find((g) => ignored.includes(g)) || null;
+  const spam = spamGuild ? { why: "guild", guildId: spamGuild } : bot && s.spamHideBots ? { why: "bot" } : null;
+  return {
+    id, sentAt: requestSentAt(id), created, ageDays, bot, fresh, spam, prof,
+    name: u?.globalName || u?.global_name || pend.globalName || u?.username || pend.username || id,
+    username: u?.username || pend.username || null,
+    avatarURL: u ? avatarOf(u, id) : pend.avatarURL || null,
+    hasAvatar: !!(u?.avatar ?? pend.avatarURL?.includes("/avatars/")),
+  };
+}
+function friendRequests() {
+  return pendingRequestIds().map(requestInfo).sort((a, b) => b.sentAt - a.sentAt);
+}
+function newFriendsCount() {
+  if (!getSettings().friendsEnabled) return 0;
+  const rs = getReqSeen(), ms = getRemovedSeen();
+  return friendRequests().filter((r) => !r.spam && r.sentAt > rs).length + getRemovedFriends().filter((r) => r.at > ms).length;
+}
+function currentFriendIds() {
+  return relEntries().filter(([, t]) => t === REL_FRIEND).map(([id]) => id);
+}
+function snapshotFriends() {
+  const ids = currentFriendIds();
+  if (!ids.length) return;
+  const old = getFriendSnapshot() || {};
+  const next = {};
+  for (const id of ids) next[id] = old[id] && !UserStore?.getUser?.(id) ? old[id] : snapshotUser(id);
+  saveFriendSnapshot(next);
+}
+function checkRemovedWhileAway() {
+  if (!getSettings().friendsEnabled) return;
+  const ids = currentFriendIds();
+  const snap = getFriendSnapshot();
+  if (!ids.length) return;
+  if (!snap) { snapshotFriends(); return; }
+  const now = new Set(ids);
+  const types = new Map(relEntries());
+  const gone = Object.keys(snap).filter((id) => !now.has(id) && types.get(id) !== 2);
+  if (gone.length && gone.length <= Math.max(5, Object.keys(snap).length * 0.3)) {
+    const at = Date.now();
+    saveRemovedFriends([...gone.map((id) => ({ ...snap[id], userId: id, at, away: true })), ...getRemovedFriends()]);
+  }
+  snapshotFriends();
+}
+function onFriendRemoved(action) {
+  try {
+    if (!getSettings().friendsEnabled) return;
+    const id = action?.relationship?.id;
+    if (!id) return;
+    const snap = getFriendSnapshot() || {};
+    const wasFriend = action?.relationship?.type === REL_FRIEND || !!snap[id];
+    const mine = declinedByMe.get(id);
+    if (wasFriend && !(mine && Date.now() - mine < 30000)) {
+      saveRemovedFriends([{ ...(snap[id] || {}), ...snapshotUser(id), userId: id, at: Date.now() }, ...getRemovedFriends()]);
+    }
+    setTimeout(() => safe(() => snapshotFriends()), 500);
+    friendsBus.emit();
+    updateFriendsBadge();
+  } catch (e) { Logger.error("friend removed", e); }
+}
+function onFriendAdded(action) {
+  try {
+    if (!getSettings().friendsEnabled) return;
+    const rel = action?.relationship;
+    if (rel?.type === REL_FRIEND) setTimeout(() => safe(() => snapshotFriends()), 500);
+    if (rel?.type === REL_PENDING_INCOMING && rel.id) { reqFirstSeen.set(rel.id, Date.parse(rel.since || "") || Date.now()); queueProfile(rel.id); }
+    friendsBus.emit();
+    updateFriendsBadge();
+  } catch (e) { Logger.error("friend added", e); }
+}
+async function respondRequest(id, accept) {
+  const A = RelationshipActions;
+  if (!A) throw new Error("RelationshipActions");
+  if (accept) {
+    if (typeof A.acceptFriendRequest === "function") return await A.acceptFriendRequest({ userId: id, context: { location: "Friends" } });
+    const src = String(A.addRelationship);
+    return await (/userId/.test(src) ? A.addRelationship({ userId: id, context: { location: "Friends" } }) : A.addRelationship(id, { location: "Friends" }));
+  }
+  declinedByMe.set(id, Date.now());
+  if (typeof A.cancelFriendRequest === "function") return await A.cancelFriendRequest(id, { location: "Friends" });
+  return await A.removeRelationship(id, { location: "Friends" });
+}
+function openProfile(id) {
+  try {
+    if (UserProfileModal) return UserProfileModal.openUserProfileModal({ userId: id, analyticsLocation: { section: "Lurk" } });
+  } catch (e) { Logger.error("profile", e); }
+  openDM(null, id, false);
+}
+function initFriends() {
+  if (!getSettings().friendsEnabled) return;
+  checkRemovedWhileAway();
+  for (const id of pendingRequestIds()) queueProfile(id);
+  updateFriendsBadge();
+}
+
 const CALL_FILE = "LurkCalls";
 const callData = { owner: null, sessions: [], totals: {}, timer: null, dirty: false };
 function addToTotals(totals, p, at, ms, s) {
@@ -1984,6 +2159,8 @@ const SI = {
   eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35",
   globe: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2c2.5 2.7 4 6.2 4 10s-1.5 7.3-4 10M12 2c-2.5 2.7-4 6.2-4 10s1.5 7.3 4 10",
+  personBell: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 6-6h2.5M18 13.5a2.8 2.8 0 0 0-2.8 2.8v1.9l-1.2 1.3h8l-1.2-1.3v-1.9a2.8 2.8 0 0 0-2.8-2.8zM17 21.5h2",
+  shield: "M12 2.5l7.5 3v6c0 4.6-3.2 8.4-7.5 10-4.3-1.6-7.5-5.4-7.5-10v-6z",
   storage: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36L21 8M21 3v5h-5",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
@@ -2027,10 +2204,10 @@ function Avatar({ userId, url, status, size = 40 }) {
 }
 function Segmented({ value, onChange, options }) {
   return h("div", { className: "dmtt-seg", role: "tablist" },
-    options.map(([v, label, n]) => h("button", {
+    options.map(([v, label, n, alert]) => h("button", {
       key: v, role: "tab", "aria-selected": value === v,
       className: `dmtt-seg-btn ${value === v ? "is-on" : ""}`, onClick: () => onChange(v),
-    }, label, n ? h("span", { className: "dmtt-seg-n" }, n) : null)));
+    }, label, n ? h("span", { className: `dmtt-seg-n ${alert ? "is-alert" : ""}` }, n) : null)));
 }
 function Search({ value, onChange, placeholder }) {
   return h("label", { className: "dmtt-search" },
@@ -2123,6 +2300,9 @@ const useNav = () => React.useContext(NavCtx);
 
 const NAMES = {
   home: () => L("Hoje", "Today"),
+  friends: () => L("Amigos", "Friends"),
+  spamFilter: () => L("Filtro anti-spam", "Spam filter"),
+  spam: () => "Spam",
   typing: () => L("Digitou e apagou", "Typed & quit"),
   mentions: () => L("Menções", "Mentions"),
   contacts: () => L("Novos contatos", "New contacts"),
@@ -2203,6 +2383,9 @@ function ScreenRouter({ s }) {
     case "mentions": return h(MentionsScreen, { initial: s.seg });
     case "contacts": return h(ContactsScreen, { initial: s.seg });
     case "snipe": return h(SnipeScreen, { channelId: s.channelId, tab: s.tab });
+    case "friends": return h(FriendsScreen, { tab: s.tab });
+    case "spamFilter": return h(SpamFilterScreen);
+    case "spam": return h(SpamListScreen);
     case "vip": return h(VipScreen);
     case "vipPerson": return h(VipPersonScreen, { userId: s.userId });
     case "calls": return h(CallsScreen);
@@ -2489,6 +2672,145 @@ function ContactsScreen({ initial = "first" }) {
       h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : saveCanceledReqs([]))) })) : null);
 }
 
+function fmtAge(ms) {
+  const hrs = ms / 3600000;
+  if (hrs < 1) return L("menos de 1 hora", "under 1 hour");
+  if (hrs < 48) { const n = Math.floor(hrs); return L(`${n} ${plural(n, "hora", "horas")}`, `${n} ${plural(n, "hour", "hours")}`); }
+  const days = hrs / 24;
+  if (days < 60) { const n = Math.floor(days); return L(`${n} dias`, `${n} days`); }
+  if (days < 365) { const n = Math.floor(days / 30.44); return L(`${n} ${plural(n, "mês", "meses")}`, `${n} ${plural(n, "month", "months")}`); }
+  const n = Math.floor(days / 365.25); return L(`${n} ${plural(n, "ano", "anos")}`, `${n} ${plural(n, "year", "years")}`);
+}
+function fmtAgo(at) {
+  const ms = Date.now() - at;
+  if (ms < 60000) return L("agora", "now");
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return L(`há ${m} min`, `${m} min ago`);
+  const hh = Math.floor(m / 60);
+  if (hh < 24) return L(`há ${hh} h`, `${hh}h ago`);
+  const d = Math.floor(hh / 24);
+  if (d < 30) return L(`há ${d} ${plural(d, "dia", "dias")}`, `${d} ${plural(d, "day", "days")} ago`);
+  return L(`há ${fmtAge(ms)}`, `${fmtAge(ms)} ago`);
+}
+function useFlash(isNew) {
+  const [on, setOn] = React.useState(isNew);
+  React.useEffect(() => { if (!isNew) return; const t = setTimeout(() => setOn(false), 4000); return () => clearTimeout(t); }, []);
+  return on;
+}
+function NitroMark({ prof }) {
+  const [broken, setBroken] = React.useState(false);
+  if (!prof?.nitro) return null;
+  return prof.nitroIcon && !broken
+    ? h("img", { className: "dmtt-nitro-img", src: prof.nitroIcon, alt: "Nitro", title: prof.nitroTitle || "Nitro", onError: () => setBroken(true) })
+    : h("span", { className: "dmtt-tag is-nitro", title: "Nitro" }, "Nitro");
+}
+function RequestActions({ r }) {
+  const [busy, setBusy] = React.useState(null);
+  const act = async (accept) => {
+    if (busy) return;
+    setBusy(accept ? "accept" : "decline");
+    try { await respondRequest(r.id, accept); }
+    catch (e) { Logger.error("friend request", e); toast(accept ? L("Não consegui aceitar o pedido.", "Couldn't accept the request.") : L("Não consegui recusar o pedido.", "Couldn't decline the request."), { type: "error" }); setBusy(null); }
+  };
+  return h("span", { className: "dmtt-fr-actions" },
+    h("button", { className: "dmtt-frbtn is-primary", disabled: !!busy, onClick: () => act(true) }, busy === "accept" ? L("Aceitando…", "Accepting…") : L("Aceitar", "Accept")),
+    h("button", { className: "dmtt-frbtn", disabled: !!busy, onClick: () => act(false) }, busy === "decline" ? L("Recusando…", "Declining…") : L("Recusar", "Decline")),
+    h("button", { className: "dmtt-frbtn is-plain", onClick: () => openProfile(r.id) }, UserProfileModal ? L("Ver perfil", "View profile") : L("Abrir conversa", "Open DM")));
+}
+function RequestRow({ r, isNew, showSpamWhy }) {
+  useTicker(30000);
+  const flash = useFlash(isNew);
+  const p = r.prof;
+  const mf = p.mutualFriends;
+  const mg = p.mutualGuilds.length;
+  const facts = [
+    r.created ? L(`Conta de ${fmtAge(Date.now() - r.created)}`, `Account age: ${fmtAge(Date.now() - r.created)}`) : null,
+    mf == null ? (p.loaded ? null : L("carregando amigos…", "loading friends…")) : mf ? L(`${mf} ${plural(mf, "amigo", "amigos")} em comum`, `${mf} mutual ${plural(mf, "friend", "friends")}`) : L("nenhum amigo em comum", "no mutual friends"),
+    mg ? L(`${mg} ${plural(mg, "servidor", "servidores")} em comum`, `${mg} mutual ${plural(mg, "server", "servers")}`) : L("nenhum servidor em comum", "no mutual servers"),
+  ];
+  const why = showSpamWhy && r.spam ? (r.spam.why === "guild" ? L(`Servidor ignorado: ${safe(() => GuildStore?.getGuild?.(r.spam.guildId)?.name) || r.spam.guildId}`, `Ignored server: ${safe(() => GuildStore?.getGuild?.(r.spam.guildId)?.name) || r.spam.guildId}`) : L("Possível bot", "Possible bot")) : null;
+  return h("div", { className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}` },
+    h(Avatar, { userId: r.id, url: r.avatarURL, size: 36 }),
+    h("span", { className: "dmtt-row-main" },
+      h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, r.name, h(NitroMark, { prof: p }), r.username ? h("span", { className: "dmtt-fr-user" }, `@${r.username}`) : null),
+      h("span", { className: "dmtt-row-sub" }, joinNodes(facts)),
+      (r.bot || r.fresh || why) ? h("span", { className: "dmtt-fr-tags" },
+        r.bot ? h("span", { className: "dmtt-tag is-red" }, L("Possível bot", "Possible bot")) : null,
+        r.fresh ? h("span", { className: "dmtt-tag is-orange" }, L("Conta nova", "New account")) : null,
+        why && r.spam.why === "guild" ? h("span", { className: "dmtt-tag" }, why) : null) : null,
+      h(RequestActions, { r })),
+    h("span", { className: "dmtt-row-time dmtt-fr-time", title: fmtDate(r.sentAt) }, fmtAgo(r.sentAt)));
+}
+function RemovedRow({ r, isNew }) {
+  useTicker(30000);
+  const flash = useFlash(isNew);
+  return h("div", { className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}` },
+    h(Avatar, { userId: r.userId, url: r.avatarURL, size: 36 }),
+    h("span", { className: "dmtt-row-main" },
+      h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-fr-user" }, `@${r.username}`) : null),
+      h("span", { className: "dmtt-row-sub" }, r.away ? L("Te removeu enquanto seu Discord estava fechado", "Removed you while your Discord was closed") : L("Te removeu da lista de amigos", "Removed you as a friend"))),
+    h("span", { className: "dmtt-row-time", title: fmtDate(r.at) }, r.away ? L(`visto ${fmtAgo(r.at)}`, `noticed ${fmtAgo(r.at)}`) : fmtAgo(r.at)));
+}
+function FriendsScreen({ tab: initialTab }) {
+  useBus(friendsBus, settingsBus);
+  const nav = useNav();
+  const [seen] = React.useState(() => ({ req: getReqSeen(), rem: getRemovedSeen() }));
+  const [tab, setTab] = React.useState(initialTab || "requests");
+  const [opened, setOpened] = React.useState(() => new Set([initialTab || "requests"]));
+  React.useEffect(() => { if (tab === "requests") markReqSeen(); else markRemovedSeen(); setOpened((o) => new Set([...o, tab])); }, [tab]);
+  if (!getSettings().friendsEnabled) {
+    return h(React.Fragment, null, h(LargeTitle, { title: NAMES.friends() }),
+      h(Group, null, h(NavRow, { icon: "personBell", color: "#34c759", title: L("Ativar Amigos", "Turn on Friends"), onClick: () => nav.push({ type: "settingsPage", id: "friends" }) })));
+  }
+  const all = friendRequests();
+  const shown = all.filter((r) => !r.spam);
+  const spam = all.filter((r) => r.spam);
+  const removed = getRemovedFriends();
+  const newReq = opened.has("requests") ? 0 : shown.filter((r) => r.sentAt > seen.req).length;
+  const newRem = opened.has("removed") ? 0 : removed.filter((r) => r.at > seen.rem).length;
+  const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0);
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade e quem te removeu", "Friend requests and who removed you") }),
+    h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
+    tab === "requests" ? h(React.Fragment, null,
+      h(Group, null, h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) })),
+      shown.length ? h(Group, { header: L(`${shown.length} ${plural(shown.length, "pedido pendente", "pedidos pendentes")}`, `${shown.length} pending ${plural(shown.length, "request", "requests")}`) }, shown.map((r) => h(RequestRow, { key: r.id, r, isNew: r.sentAt > seen.req })))
+        : h(Empty, { icon: "personBell", title: L("Nenhum pedido pendente", "No pending requests") }, L("Quando alguém te mandar um pedido de amizade, aparece aqui.", "When someone sends you a friend request, it shows up here.")),
+      spam.length ? h(Group, null, h(NavRow, { title: L(`Spam (${spam.length})`, `Spam (${spam.length})`), onClick: () => nav.push({ type: "spam" }) })) : null)
+    : h(React.Fragment, null,
+      removed.length ? h(Group, null, removed.map((r, i) => h(RemovedRow, { key: `${r.userId}-${r.at}-${i}`, r, isNew: r.at > seen.rem })))
+        : h(Empty, { icon: "personBell", title: L("Ninguém te removeu", "No one removed you") }, L("Quando alguém desfizer a amizade com você, aparece aqui.", "When someone unfriends you, it shows up here.")),
+      removed.length ? h(Group, null, h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => saveRemovedFriends([])) })) : null));
+}
+function SpamListScreen() {
+  useBus(friendsBus, settingsBus);
+  const spam = friendRequests().filter((r) => r.spam);
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: "Spam", subtitle: L("Pedidos pendentes escondidos pelo filtro anti-spam", "Pending requests hidden by the spam filter") }),
+    spam.length ? h(Group, null, spam.map((r) => h(RequestRow, { key: r.id, r, isNew: false, showSpamWhy: true })))
+      : h(Empty, { icon: "shield", title: L("Nada no spam", "Nothing in spam") }));
+}
+function SpamFilterScreen() {
+  useBus(friendsBus, settingsBus);
+  const [q, setQ] = React.useState("");
+  const selected = getSpamGuilds();
+  const guilds = Object.values(safe(() => GuildStore?.getGuilds?.()) || {}).map((g) => ({ id: g.id, name: g.name, icon: g.icon }));
+  const query = normalize(q.trim());
+  const list = guilds.filter((g) => !query || normalize(g.name).includes(query)).sort((a, b) => (selected.includes(b.id) - selected.includes(a.id)) || a.name.localeCompare(b.name));
+  const toggle = (id) => saveSpamGuilds(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  const iconOf = (g) => (g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.webp?size=64` : null);
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: NAMES.spamFilter(), subtitle: L("O que cair aqui vai para Spam em vez de aparecer nos novos pedidos", "Anything caught here goes to Spam instead of New requests") }),
+    h(Group, { header: L("Possíveis bots", "Possible bots"), footer: L(`Conta com até ${getSettings().friendsBotDays} dias, sem amigos em comum, sem contas conectadas e sem Nitro.`, `Account up to ${getSettings().friendsBotDays} days old, with no mutual friends, no connected accounts and no Nitro.`) },
+      h(SettingRow, { item: sw("spamHideBots", L("Mandar possíveis bots para Spam", "Move possible bots to Spam")) })),
+    h(Group, { header: L(`Servidores ignorados${selected.length ? ` (${selected.length})` : ""}`, `Ignored servers${selected.length ? ` (${selected.length})` : ""}`), footer: L("Pedidos de quem está nesses servidores vão para Spam.", "Requests from people in these servers go to Spam.") },
+      h("div", { className: "dmtt-row dmtt-row-search" }, h(Search, { value: q, onChange: setQ, placeholder: L("Buscar servidor pelo nome", "Search servers by name") })),
+      list.slice(0, 200).map((g) => h("button", { key: g.id, className: "dmtt-row", onClick: () => toggle(g.id) },
+        iconOf(g) ? h("img", { className: "dmtt-guild-ic", src: iconOf(g), alt: "" }) : h("span", { className: "dmtt-guild-ic is-text" }, (g.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 3)),
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, g.name)),
+        h("span", { className: `dmtt-check ${selected.includes(g.id) ? "is-on" : ""}` }, selected.includes(g.id) ? "✓" : ""))),
+      !list.length ? h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-sub" }, L("Nenhum servidor encontrado", "No servers found"))) : null));
+}
 function SnipeScreen({ channelId, tab: initialTab }) {
   useBus(vipBus, settingsBus);
   const nav = useNav();
@@ -3160,6 +3482,13 @@ function settingsPages() {
         { ...sw("showSnipeButton", L("Botão de histórico (apagadas e editadas)", "History button (deleted & edited)")), after: () => syncDOM() },
         { id: "lurkIcon", label: L("Ícone do Lurk", "Lurk icon"), type: "select", options: [["ghost", L("Fantasminha", "Ghost")], ["ninja", L("Máscara ninja", "Ninja mask")], ["eye", L("Olho", "Eye")]], after: () => syncDOM() }] }] },
     { id: "ignored", title: L("Ignorados", "Ignored"), icon: "ban", color: "#8e8e93", summary: () => { const ig = getIgnored(); const n = Object.keys(ig.users).length + Object.keys(ig.channels).length; return n ? String(n) : L("Nenhum", "None"); }, sections: [], custom: () => h(IgnoredList) },
+    { id: "friends", title: NAMES.friends(), icon: "personBell", color: "#34c759", summary: () => (getSettings().friendsEnabled ? L("Ligado", "On") : L("Desligado", "Off")),
+      sections: [
+        { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes e quem te removeu da lista de amigos. Não manda aviso, só o contador vermelho.", "Adds a top bar button with your pending friend requests and who removed you as a friend. No notifications, just the red counter."),
+          items: [{ ...sw("friendsEnabled", L("Ativar Amigos", "Turn on Friends")), after: (v) => { if (v) safe(() => initFriends()); syncDOM(); } }] },
+        { title: L("Etiquetas", "Tags"), footer: L("\"Possível bot\": conta nova, sem amigos em comum, sem contas conectadas e sem Nitro. As etiquetas não escondem ninguém; para isso use o Filtro anti-spam.", "\"Possible bot\": a new account with no mutual friends, no connected accounts and no Nitro. Tags don't hide anyone; use the Spam filter for that."),
+          items: [num("friendsNewDays", L("\"Conta nova\" até", "\"New account\" up to"), 1, 3650, 1, L("dias", "days")), num("friendsBotDays", L("\"Possível bot\" até", "\"Possible bot\" up to"), 1, 3650, 1, L("dias", "days"))] },
+      ] },
     { id: "storage", title: L("Armazenamento", "Storage"), icon: "storage", color: "#30b0c7", summary: () => { const n = getArchives().length; return n ? L(`${n} ${plural(n, "arquivo", "arquivos")}`, `${n} ${plural(n, "archive", "archives")}`) : ""; },
       sections: [
         { title: L("Mensagens dos VIPs", "VIP messages"), footer: L(`Ao passar do limite, a metade mais antiga vai para o arquivo morto (pasta ${ARCHIVE_DIR}). Nada é apagado. Links de anexos do Discord expiram depois de um tempo.`, `When the limit is reached, the oldest half moves to the archive (${ARCHIVE_DIR} folder). Nothing is deleted. Discord attachment links expire after a while.`),
@@ -3180,7 +3509,7 @@ function settingsPages() {
       sections: [{ items: [sw("backupEnabled", L("Backup automático", "Automatic backup")), num("backupDays", L("A cada", "Every"), 1, 60, 1, L("dias", "days")), num("backupKeep", L("Guardar", "Keep"), 1, 10, 1, L("cópias", "copies"))] }], custom: () => h(BackupSection) },
   ];
 }
-const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus"], ["privado", "mentions", "contatos", "vip", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
+const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus"], ["privado", "mentions", "contatos", "friends", "vip", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
 
 function SettingsScreen() {
   useBus(settingsBus, vipBus, backupBus, historyBus);
@@ -3318,6 +3647,7 @@ const openSnipe = (channelId) => openApp([{ type: "home" }, { type: "snipe", cha
 
 let toolbarBtn = null;
 let snipeBtn = null;
+let friendsBtn = null;
 let toolbarLang = null;
 function makeTopButton(label, iconHTML, onClick) {
   const btn = document.createElement("div");
@@ -3335,7 +3665,7 @@ function placeToolbarButton() {
   const s = getSettings();
 
   const key = `${lang()}|${s.lurkIcon}`;
-  if (toolbarLang && toolbarLang !== key) { toolbarBtn?.remove(); snipeBtn?.remove(); toolbarBtn = null; snipeBtn = null; }
+  if (toolbarLang && toolbarLang !== key) { toolbarBtn?.remove(); snipeBtn?.remove(); friendsBtn?.remove(); toolbarBtn = null; snipeBtn = null; friendsBtn = null; }
   toolbarLang = key;
   if (!s.showToolbarButton) { toolbarBtn?.remove(); }
   else {
@@ -3352,10 +3682,23 @@ function placeToolbarButton() {
       else if (upper?.lastElementChild) { upper.lastElementChild.insertAdjacentElement("afterbegin", toolbarBtn); diag.toolbar = "upperContainer"; }
     }
   }
-  if (!s.showSnipeButton) { snipeBtn?.remove(); return; }
-  if (!snipeBtn) { snipeBtn = makeTopButton(NAMES.snipe(), svgStroke(SI.clock), () => openSnipe(SelectedChannelStore?.getChannelId?.() || null)); updateSnipeBadge(); }
-  const anchor = toolbarBtn?.isConnected ? toolbarBtn : document.querySelector('[aria-label="Removed Connection History"]');
-  if (anchor?.parentElement && anchor.nextElementSibling !== snipeBtn) anchor.insertAdjacentElement("afterend", snipeBtn);
+  if (!s.showSnipeButton) { snipeBtn?.remove(); }
+  else {
+    if (!snipeBtn) { snipeBtn = makeTopButton(NAMES.snipe(), svgStroke(SI.clock), () => openSnipe(SelectedChannelStore?.getChannelId?.() || null)); updateSnipeBadge(); }
+    const anchor = toolbarBtn?.isConnected ? toolbarBtn : document.querySelector('[aria-label="Removed Connection History"]');
+    if (anchor?.parentElement && anchor.nextElementSibling !== snipeBtn) anchor.insertAdjacentElement("afterend", snipeBtn);
+  }
+  if (!s.friendsEnabled) { friendsBtn?.remove(); return; }
+  if (!friendsBtn) { friendsBtn = makeTopButton(NAMES.friends(), svgStroke(SI.personBell), () => openApp([{ type: "home" }, { type: "friends" }])); updateFriendsBadge(); }
+  const fAnchor = snipeBtn?.isConnected ? snipeBtn : toolbarBtn?.isConnected ? toolbarBtn : document.querySelector('[aria-label="Removed Connection History"]');
+  if (fAnchor?.parentElement && fAnchor.nextElementSibling !== friendsBtn) fAnchor.insertAdjacentElement("afterend", friendsBtn);
+}
+function updateFriendsBadge() {
+  const badge = friendsBtn?.querySelector(".dmtt-toolbar-badge");
+  if (!badge) return;
+  const n = getSettings().showBadge ? safe(() => newFriendsCount()) || 0 : 0;
+  badge.hidden = !n;
+  badge.textContent = n > 99 ? "99+" : String(n);
 }
 function updateBadge() {
   const badge = toolbarBtn?.querySelector(".dmtt-toolbar-badge");
@@ -3481,6 +3824,7 @@ function stopDOM() {
   domRaf = 0;
   toolbarBtn?.remove(); toolbarBtn = null;
   snipeBtn?.remove(); snipeBtn = null;
+  friendsBtn?.remove(); friendsBtn = null;
   unmountGuildBar();
   document.querySelectorAll(".dmtt-ls, .dmtt-ls-line").forEach((n) => n.remove());
   document.querySelectorAll(".dmtt-ls-host").forEach((n) => n.classList.remove("dmtt-ls-host"));
@@ -3714,6 +4058,29 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-addid-msg.is-ok { color: var(--c-green); }
 .dmtt-addid-msg.is-err { color: #ff6961; }
 .dmtt-select-wide { max-width: 100%; width: 100%; height: 34px; }
+.dmtt-seg-n.is-alert { opacity: 1; min-width: 16px; height: 16px; padding: 0 5px; margin-left: 6px; box-sizing: border-box; border-radius: 8px; background: #ff3b30; color: #fff; font-size: 11px; font-weight: 600; line-height: 16px; display: inline-block; }
+.dmtt-fr { transition: background-color 1.2s ease; }
+.dmtt-fr.is-flash { background-color: rgba(10, 132, 255, .09); }
+.dmtt-fr-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dmtt-fr-name .dmtt-newdot { margin-right: 0; vertical-align: 0; }
+.dmtt-fr-user { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.dmtt-fr-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.dmtt-frbtn { height: 28px; padding: 0 14px; border-radius: 14px; border: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--c-text, #fff); transition: opacity .15s, filter .15s; }
+.dmtt-frbtn:hover:not(:disabled) { filter: brightness(1.15); }
+.dmtt-frbtn:disabled { opacity: .5; cursor: default; }
+.dmtt-frbtn.is-primary { background: #0a84ff; color: #fff; }
+.dmtt-frbtn.is-plain { background: transparent; color: #0a84ff; padding: 0 6px; }
+.dmtt-fr-time { align-self: flex-start; margin-top: 2px; }
+.dmtt-fr-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.dmtt-nitro-img { width: 16px; height: 16px; }
+.dmtt-tag.is-orange { background: rgba(255, 159, 10, .16); color: #ff9f0a; }
+.dmtt-tag.is-nitro { background: rgba(255, 115, 250, .16); color: #ff73fa; }
+.dmtt-guild-ic { width: 28px; height: 28px; border-radius: 8px; flex: none; object-fit: cover; }
+.dmtt-guild-ic.is-text { display: flex; align-items: center; justify-content: center; background: var(--background-modifier-accent, #4e5058); color: var(--text-default); font-size: 10px; font-weight: 600; }
+.dmtt-check { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--text-muted); display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff; flex: none; }
+.dmtt-check.is-on { background: #0a84ff; border-color: #0a84ff; }
+.dmtt-row-search { padding-top: 6px; padding-bottom: 6px; }
+.dmtt-row-search .dmtt-search { margin: 0; flex: 1; }
 .dmtt-newdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0a84ff; margin-right: 6px; vertical-align: 2px; }
 .dmtt-avbtn { padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%; flex: none; }
 .dmtt-app { overscroll-behavior: contain; }
@@ -3729,12 +4096,12 @@ const SUBS = {
   MESSAGE_UPDATE: onMessageUpdate,
   MESSAGE_DELETE: onMessageDelete,
   MESSAGE_DELETE_BULK: onMessageDeleteBulk,
-  RELATIONSHIP_ADD: onRelationshipAdd,
-  RELATIONSHIP_REMOVE: onRelationshipRemove,
+  RELATIONSHIP_ADD: (a) => { onRelationshipAdd(a); onFriendAdded(a); },
+  RELATIONSHIP_REMOVE: (a) => { onRelationshipRemove(a); onFriendRemoved(a); },
   MESSAGE_REACTION_ADD: onReactionAdd,
   MESSAGE_REACTION_REMOVE: onReactionRemove,
   VOICE_STATE_UPDATES: onVoiceStates,
-  CONNECTION_OPEN: () => setTimeout(subscribeVipGuilds, 3000),
+  CONNECTION_OPEN: () => { setTimeout(subscribeVipGuilds, 3000); setTimeout(() => safe(() => initFriends()), 5000); },
 };
 
 module.exports = class Lurk {
@@ -3773,7 +4140,9 @@ module.exports = class Lurk {
     PresenceStore?.addChangeListener?.(onPresenceChange);
     this.onChannelSelect = () => safe(() => placeLastSeen());
     SelectedChannelStore?.addChangeListener?.(this.onChannelSelect);
-    this.onSettings = settingsBus.sub(() => safe(() => syncDOM()));
+    this.onSettings = settingsBus.sub(() => { safe(() => syncDOM()); safe(() => updateFriendsBadge()); });
+    this.onFriends = friendsBus.sub(() => safe(() => updateFriendsBadge()));
+    this.friendsTimer = setTimeout(() => safe(() => initFriends()), 8000);
     scheduleSubscribe();
     this.subInterval = setInterval(subscribeVipGuilds, 120000);
     this.backupTimer = setTimeout(() => safe(() => runBackup(false)), 30000);
@@ -3835,6 +4204,8 @@ module.exports = class Lurk {
     try { PresenceStore?.removeChangeListener?.(onPresenceChange); } catch {}
     try { SelectedChannelStore?.removeChangeListener?.(this.onChannelSelect); } catch {}
     try { this.onSettings?.(); } catch {}
+    try { this.onFriends?.(); } catch {}
+    clearTimeout(this.friendsTimer);
     snipeActive = false;
     if (window.__dmttSnipeHook === snipeInterceptor) window.__dmttSnipeHook = null;
     sessions.forEach((s) => clearTimeout(s.timer));
