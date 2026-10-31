@@ -25,6 +25,8 @@ A [BetterDiscord](https://betterdiscord.app) plugin by [Vitor](https://github.co
 Add people from their right-click menu or by user ID, and Lurk keeps a closer watch on them:
 - **Status timeline**: online, idle, DND, offline and device, plus time online today. Lurk can tell when a friend is **invisible** (they show as offline but are typing or sending messages).
 - **Last online** under their name in your DM list ("offline for 2h"). Optionally also how long they've been online, at the top of the open conversation and in server member lists.
+- **Profile changes**: name, username and avatar changes for every VIP, with the old and new avatar side by side.
+- **Watch profile** for one VIP at a time: connected accounts added or removed, bio, pronouns and banner, checked every 15 minutes.
 - **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
 - **Typed & quit in servers**, across all your shared servers (experimental).
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
@@ -36,6 +38,7 @@ A single feed (clock button in the top bar) with an unread badge:
 - **Search** through all VIP messages by text, person, channel or server, optionally including old messages.
 - **Old messages**: when VIP messages reach the limit, the oldest ones are archived instead of deleted. Browse, search or delete each archive right inside Lurk.
 - **Status**: every status change.
+- **Profile**: name, username, avatar, connections, bio, pronouns and banner changes.
 - **People**: each VIP with their full history.
 
 ### @ Mentions
@@ -47,6 +50,15 @@ A single feed (clock button in the top bar) with an unread badge:
 ### 👤 New contacts
 - **First-time typers**: someone who never talked to you typed and stopped without sending. People who do send aren't listed, which keeps spam bots out.
 - **Canceled friend requests**: someone sent you a request and took it back.
+
+### 🔔 Friends
+Off by default; turn it on in **Settings → Friends**. A top bar button with an unread counter (no notifications):
+- **New requests**: every pending friend request with when it was sent, account age, mutual friends and mutual servers (hover to see who) and Nitro. Accept, decline or view the profile right from the card.
+- **Tags**: *New account* and *Possible bot* (a very new account with no mutual friends, no connected accounts and no Nitro).
+- **Quick filters**: All · Mutual friends · New account · Possible bot.
+- **Spam filter**: pick servers to ignore and requests from their members go to **Spam**, even if they leave the server afterwards. Optionally send possible bots to Spam too.
+- **Bulk actions**: decline all possible bots, or everything in Spam, one per second so Discord doesn't rate-limit you.
+- **Removed you**: people who unfriended you, including while your Discord was closed.
 
 ### 📞 Call time
 Total time in calls with each person, kept forever, plus the details of your recent calls (when, where and who was there).
@@ -76,6 +88,7 @@ Total time in calls with each person, kept forever, plus the details of your rec
 | Lurk button (top bar) | Opens Lurk: typed & quit, VIPs, mentions, new contacts, calls and settings |
 | Clock button (top bar) | VIP history: deleted/edited messages, search, old messages, status changes, people |
 | Direct messages list | How long each VIP has been offline, under their name |
+| Friends button (top bar) | Pending friend requests, spam filter and who removed you |
 | Server sidebar | Avatar of whoever is typing to you right now; click to open the DM |
 | Right-click a user | See their attempts, add or remove them as VIP, see call time, ignore them |
 | Right-click a group or channel | See typing attempts and deleted/edited messages there |
@@ -90,7 +103,7 @@ Lurk keeps itself up to date. After each update, a window shows what's new in th
 ## Privacy
 
 - Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIPMessages.config.json`, `LurkBackup.config.json`… and the `LurkArchives` folder). Nothing is uploaded anywhere.
-- The only network request Lurk makes is to download its own updates from this repository.
+- Lurk only talks to Discord itself (for example to load a friend request's profile or accept a request) and to this repository to download its own updates. Nothing goes to any other server.
 - Lurk only sees what your Discord client already receives. It can't read other people's DMs or servers you're not in.
 - Don't share your config files or the `LurkArchives` folder: they contain your logs.
 
