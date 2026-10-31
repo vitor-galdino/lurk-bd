@@ -17,18 +17,25 @@ jobs:
       - name: Read version
         id: v
         run: echo "version=$(grep -m1 -oP '@version\s+\K[\d.]+' Lurk.plugin.js)" >> "$GITHUB_OUTPUT"
+      - name: Previous release
+        id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "version=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | sed 's/^v//')" >> "$GITHUB_OUTPUT"
       - name: Build notes
         run: |
           node -e '
           const s = require("fs").readFileSync("Lurk.plugin.js", "utf8");
           const v = process.argv[1];
-          const start = s.indexOf("{ version: \"" + v + "\"");
+          const prev = process.argv[2] || "";
+          const cmp = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; };
           const T = { en: { new: "New", improved: "Improved", fixed: "Fixed" }, pt: { new: "Novidades", improved: "Melhorias", fixed: "Correções" } };
           const unq = (x) => x.replace(/\\(.)/g, "$1");
           let items = [];
-          if (start >= 0) {
-            const block = s.slice(start, s.indexOf("] },", start));
-            items = [...block.matchAll(/\[\s*"(new|improved|fixed)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*\]/g)].map((m) => ({ t: m[1], pt: unq(m[2]), en: unq(m[3]) }));
+          for (const m of s.matchAll(/\{ version: "([\d.]+)", items: \[([\s\S]*?)\] \},/g)) {
+            const ver = m[1];
+            if (cmp(ver, v) > 0 || (prev && cmp(ver, prev) <= 0) || (!prev && ver !== v)) continue;
+            items.push(...[...m[2].matchAll(/\[\s*"(new|improved|fixed)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\s*\]/g)].map((x) => ({ t: x[1], pt: unq(x[2]), en: unq(x[3]) })));
           }
           const section = (lang) => ["new", "improved", "fixed"].map((t) => {
             const list = items.filter((x) => x.t === t).map((x) => "- " + x[lang]);
@@ -37,7 +44,7 @@ jobs:
           let out = "## English\n\n" + section("en") + "\n**Install:** download `Lurk.plugin.js` below and put it in your BetterDiscord plugins folder.\n\n";
           out += "## Português\n\n" + section("pt") + "\n**Instalar:** baixe o `Lurk.plugin.js` abaixo e coloque na pasta de plugins do BetterDiscord.\n";
           require("fs").writeFileSync("notes.md", out);
-          ' "${{ steps.v.outputs.version }}"
+          ' "${{ steps.v.outputs.version }}" "${{ steps.prev.outputs.version }}"
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
