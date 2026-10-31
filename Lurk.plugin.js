@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.6.1
+ * @version 2.6.2
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.6.1";
+const VERSION = "2.6.2";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.6.2", items: [
+    ["fixed", "Servidores em comum, amigos em comum e Nitro dos pedidos de amizade não carregavam.", "Mutual servers, mutual friends and Nitro on friend requests didn't load."],
+    ["improved", "O modal do Lurk agora fecha pelo X no canto superior direito.", "The Lurk window now closes with the X in the top right corner."],
+    ["fixed", "A barra de rolagem branca do sistema foi trocada pela do Discord.", "The white system scrollbar was replaced with Discord's own."],
+  ] },
   { version: "2.6.1", items: [
     ["improved", "Card de pedido de amizade mais organizado: idade da conta, amigos e servidores em comum com ícones. Passe o mouse para ver a data de criação da conta e quem são os amigos e servidores em comum.", "Cleaner friend request cards: account age, mutual friends and mutual servers with icons. Hover to see when the account was created and who the mutual friends and servers are."],
     ["improved", "Quem mandou pedido estando num servidor ignorado continua no Spam mesmo depois de sair do servidor.", "People who sent a request while in an ignored server stay in Spam even after leaving it."],
@@ -84,6 +89,7 @@ const PrivateChannelActions = safe(() => Webpack.getModule((m) => typeof m?.open
 const RelationshipActions = safe(() => Webpack.getModule((m) => typeof m?.removeRelationship === "function" && typeof m?.addRelationship === "function"));
 const ProfileActions = safe(() => Webpack.getModule((m) => typeof m?.fetchProfile === "function"));
 const UserProfileModal = safe(() => Webpack.getModule((m) => typeof m?.openUserProfileModal === "function"));
+const RestAPI = safe(() => Webpack.getModule((m) => typeof m?.get === "function" && typeof m?.getAPIBaseURL === "function")) || safe(() => Webpack.getByKeys("getAPIBaseURL", "get"));
 const UserFetcher = safe(() => Webpack.getModule((m) => typeof m?.getUser === "function" && typeof m?.fetchCurrentUser === "function"));
 const GatewayModule = safe(() => Webpack.getByKeys("getSocket"));
 
@@ -1708,15 +1714,14 @@ function queueProfile(id) {
   runProfileQueue();
 }
 async function runProfileQueue() {
-  if (profileBusy || !ProfileActions) return;
+  if (profileBusy || (!RestAPI && !ProfileActions)) return;
   profileBusy = true;
   while (profileQueue.length) {
     const wait = profilePauseUntil - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     const id = profileQueue.shift();
     try {
-      await ProfileActions.fetchProfile(id, { withMutualGuilds: true, withMutualFriends: true });
-      getProfileCache()[id] = readProfile(id);
+      getProfileCache()[id] = await loadProfile(id);
       saveProfileCacheSoon();
       friendsBus.emit();
       updateFriendsBadge();
@@ -1742,6 +1747,46 @@ function pruneProfileCache(ids) {
   let changed = false;
   for (const id of Object.keys(c)) if (!keep.has(id)) { delete c[id]; changed = true; }
   if (changed) saveProfileCacheSoon();
+}
+const profileDiag = { method: null, ok: 0, fail: 0, lastError: null, lastKeys: null };
+async function loadProfile(id) {
+  if (RestAPI) {
+    try {
+      const res = await RestAPI.get({ url: `/users/${id}/profile`, query: { with_mutual_guilds: true, with_mutual_friends: true, with_mutual_friends_count: false }, oldFormErrors: true });
+      const body = res?.body || res;
+      if (body && typeof body === "object" && (body.user || body.mutual_guilds || body.connected_accounts)) {
+        profileDiag.method = "rest"; profileDiag.ok++; profileDiag.lastKeys = Object.keys(body).slice(0, 20);
+        diag.profile = { ...profileDiag }; saveDiag();
+        return profileFromBody(body);
+      }
+    } catch (e) {
+      const status = e?.status || e?.statusCode;
+      profileDiag.fail++; profileDiag.lastError = `${status || ""} ${e?.body?.message || e?.message || e}`.trim().slice(0, 200);
+      diag.profile = { ...profileDiag }; saveDiag();
+      if (status === 429 || !ProfileActions) throw e;
+    }
+  }
+  await ProfileActions.fetchProfile(id, { withMutualGuilds: true, withMutualFriends: true });
+  profileDiag.method = "store"; profileDiag.ok++;
+  diag.profile = { ...profileDiag }; saveDiag();
+  return readProfile(id);
+}
+function profileFromBody(b) {
+  const friends = Array.isArray(b.mutual_friends) ? b.mutual_friends : null;
+  const badges = b.badges || [];
+  const nitroBadge = badges.find((x) => /premium|nitro/i.test(`${x.id || ""} ${x.description || ""}`)) || null;
+  const up = b.user_profile || {};
+  return {
+    at: Date.now(), loaded: true,
+    mutualFriends: friends ? friends.length : Number.isFinite(b.mutual_friends_count) ? b.mutual_friends_count : null,
+    friendNames: friends ? friends.map((f) => f.global_name || f.globalName || f.username).filter(Boolean).slice(0, 30) : [],
+    mutualGuilds: (b.mutual_guilds || []).map((g) => g.id).filter(Boolean),
+    nitro: !!(b.premium_type || b.premium_since || b.premium_guild_since || nitroBadge),
+    nitroIcon: nitroBadge?.icon ? `https://cdn.discordapp.com/badge-icons/${nitroBadge.icon}.png` : null, nitroTitle: nitroBadge?.description || "Nitro",
+    connections: (b.connected_accounts || []).length,
+    connected: (b.connected_accounts || []).map((c) => ({ type: c.type, name: c.name, id: c.id, verified: !!c.verified })),
+    bio: up.bio ?? b.user?.bio ?? null, pronouns: up.pronouns ?? null, banner: b.user?.banner ?? up.banner ?? null,
+  };
 }
 const userLabel = (x) => { const u = x?.user || x; return u?.globalName || u?.global_name || u?.username || null; };
 function readProfile(id) {
@@ -2384,7 +2429,7 @@ function screenTitle(s) {
     default: return NAMES[s.type]?.() || "";
   }
 }
-function App({ initial }) {
+function App({ initial, onClose }) {
   useBus(settingsBus);
   const [stack, setStack] = React.useState(() => (initial?.length ? initial : [{ type: "home" }]));
   const bodyRef = React.useRef(null);
@@ -2412,6 +2457,12 @@ function App({ initial }) {
       const avail = outer - top - (parseFloat(cs.paddingBottom) || 0) - 2;
       el.style.height = `${Math.max(320, Math.min(680, Math.floor(avail)))}px`;
     };
+    let footer = null;
+    if (onClose) {
+      const dialog = el.closest('[role="dialog"]') || p.parentElement;
+      footer = [...(dialog?.querySelectorAll('[class*="footer"]') || [])].find((f) => !el.contains(f)) || null;
+      if (footer) { appCloseBtn = footer.querySelector("button"); footer.style.display = "none"; }
+    }
     fit();
     window.addEventListener("resize", fit);
     return () => { window.removeEventListener("resize", fit); p.style.overflowY = prevOverflow; };
@@ -2429,7 +2480,8 @@ function App({ initial }) {
       h("div", { className: "dmtt-navbar" },
         prev ? h("button", { className: "dmtt-back", onClick: nav.pop }, h(Icon, { d: ICON_BACK, size: 18 }), h("span", null, screenTitle(prev))) : h("span", { className: "dmtt-brand" }, h(SIcon, { d: LURK_ICON(), size: 15 }), "Lurk"),
         h("span", { className: "dmtt-navbar-spacer" }),
-        top.type !== "settings" && top.type !== "settingsPage" ? h("button", { className: "dmtt-nav-icon", title: NAMES.settings(), onClick: () => nav.push({ type: "settings" }) }, h(SIcon, { d: SI.gear, size: 17 })) : null),
+        top.type !== "settings" && top.type !== "settingsPage" ? h("button", { className: "dmtt-nav-icon", title: NAMES.settings(), onClick: () => nav.push({ type: "settings" }) }, h(SIcon, { d: SI.gear, size: 17 })) : null,
+        onClose ? h("button", { className: "dmtt-close", title: L("Fechar", "Close"), "aria-label": L("Fechar", "Close"), onClick: onClose }, h(SIcon, { d: "M7 7l10 10M17 7L7 17", size: 13, sw: 2.4 })) : null),
       h("div", { className: "dmtt-body", ref: bodyRef, key: stack.length }, h(ScreenRouter, { s: top }))));
 }
 function LargeTitle({ title, subtitle, right }) {
@@ -3730,10 +3782,15 @@ function IgnoredList() {
     : h(Empty, { icon: "ban", title: L("Ninguém ignorado", "No one ignored") }, L("Clique com o botão direito em uma pessoa ou grupo para ignorar.", "Right-click a person or group to ignore them."));
 }
 
+let appCloseBtn = null;
+function closeApp() {
+  if (appCloseBtn?.isConnected) { appCloseBtn.click(); return; }
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true }));
+}
 function openApp(stack) {
   lastSeenBeforeOpen = getSeenAt();
   markSeen();
-  UI.showConfirmationModal("", h(App, { initial: stack }), { confirmText: L("Fechar", "Close"), cancelText: null });
+  UI.showConfirmationModal("", h(App, { initial: stack, onClose: closeApp }), { confirmText: L("Fechar", "Close"), cancelText: null });
 }
 const openHub = () => openApp([{ type: "home" }]);
 function openHistory(filter = {}) {
@@ -3977,7 +4034,7 @@ const CSS = `
 .dmtt-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dmtt-back:hover, .dmtt-nav-icon:hover { background: var(--c-hover); }
 .dmtt-nav-icon { display: inline-flex; padding: 6px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; }
-.dmtt-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px 20px 2px; margin-right: -6px; display: flex; flex-direction: column; gap: 12px; animation: dmtt-push .22s cubic-bezier(.2,.8,.2,1); scrollbar-width: thin; }
+.dmtt-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px 20px 2px; margin-right: -6px; display: flex; flex-direction: column; gap: 12px; animation: dmtt-push .22s cubic-bezier(.2,.8,.2,1); scrollbar-width: thin; scrollbar-color: var(--scrollbar-thin-thumb, rgba(0,0,0,.4)) var(--scrollbar-thin-track, transparent); }
 @keyframes dmtt-push { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 .dmtt-largetitle { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 14px 4px 0; }
 .dmtt-largetitle h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; color: var(--c-strong); line-height: 1.15; }
@@ -4195,6 +4252,8 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-newdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0a84ff; margin-right: 6px; vertical-align: 2px; }
 .dmtt-avbtn { padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%; flex: none; }
 .dmtt-app { overscroll-behavior: contain; }
+.dmtt-close { width: 28px; height: 28px; margin-left: 6px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--text-muted); cursor: pointer; flex: none; transition: background .15s, color .15s; }
+.dmtt-close:hover { color: var(--text-default, #fff); background: var(--c-fill1, rgba(120,120,128,.36)); }
 .dmtt-body::-webkit-scrollbar { width: 8px; }
 .dmtt-body::-webkit-scrollbar-thumb { background: var(--scrollbar-thin-thumb, rgba(255,255,255,.18)); border-radius: 4px; }
 .dmtt-body::-webkit-scrollbar-track { background: transparent; }
