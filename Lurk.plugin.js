@@ -24,6 +24,7 @@ const CHANGELOG = [
   { version: "2.7.3", items: [
     ["improved", "O Spam agora fica no topo da lista de pedidos, logo abaixo do Filtro anti-spam.", "Spam now sits at the top of the request list, right below the Spam filter."],
     ["improved", "Nomes mais curtos nos filtros dos pedidos, para caberem inteiros.", "Shorter request filter names so they fit."],
+    ["improved", "Espaçamento do topo das janelas do Lurk igual ao de baixo.", "Top spacing of Lurk windows now matches the bottom."],
   ] },
   { version: "2.7.2", items: [
     ["improved", "Ao aceitar o pedido de alguém sem amigos em comum, o Lurk pede confirmação, igual ao Discord.", "Accepting a request from someone with no mutual friends asks for confirmation, just like Discord."],
@@ -2615,12 +2616,22 @@ function App({ initial, onClose }) {
       el.style.height = `${Math.max(320, Math.min(680, Math.floor(avail)))}px`;
     };
     let footer = null;
+    let dialog = null;
     if (onClose) {
-      const dialog = el.closest('[role="dialog"]') || p.parentElement;
+      dialog = el.closest('[role="dialog"]') || p.parentElement;
       footer = [...(dialog?.querySelectorAll('[class*="footer"]') || [])].find((f) => !el.contains(f)) || null;
       if (footer) { appCloseBtn = footer.querySelector("button"); footer.style.display = "none"; }
+      const header = [...(dialog?.querySelectorAll('[class*="header"]') || [])].find((x) => !el.contains(x) && !x.contains(el) && !(x.textContent || "").trim());
+      if (header) header.style.display = "none";
     }
     fit();
+    if (dialog) {
+      el.style.marginTop = "0px";
+      fit();
+      const d = dialog.getBoundingClientRect(), r = el.getBoundingClientRect();
+      const delta = Math.round((d.bottom - r.bottom) - (r.top - d.top));
+      if (delta) { el.style.marginTop = `${delta}px`; fit(); }
+    }
     window.addEventListener("resize", fit);
     return () => { window.removeEventListener("resize", fit); p.style.overflowY = prevOverflow; };
   }, []);
