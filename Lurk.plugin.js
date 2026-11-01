@@ -4441,7 +4441,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-chev-rot { transition: transform .18s; }
 .dmtt-cell.is-open > .dmtt-row .dmtt-chev-rot { transform: rotate(90deg); }
 .dmtt-tile { display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; color: #fff; flex: none; }
-.dmtt-badge-red { min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: #ff3b30; color: #fff; font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; flex: none; }
+.dmtt-badge-red { min-width: 17px; height: 17px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: #ff3b30; color: #fff; font-family: "gg sans", "Noto Sans", -apple-system, "Segoe UI", sans-serif; font-size: 11px; font-weight: 800; line-height: 17px; letter-spacing: 0; font-variant-numeric: tabular-nums; text-align: center; flex: none; -webkit-font-smoothing: antialiased; }
 .dmtt-countpill { font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 8px; line-height: 16px; background: var(--c-fill2); color: var(--c-text); }
 .dmtt-strong { color: var(--c-strong); font-weight: 600; }
 .dmtt-num { font-variant-numeric: tabular-nums; }
@@ -4573,7 +4573,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-addid-msg.is-ok { color: var(--c-green); }
 .dmtt-addid-msg.is-err { color: #ff6961; }
 .dmtt-select-wide { max-width: 100%; width: 100%; height: 34px; }
-.dmtt-seg-n.is-alert { opacity: 1; min-width: 16px; height: 16px; padding: 0 5px; margin-left: 0; box-sizing: border-box; border-radius: 8px; background: #ff3b30; color: #fff; font-size: 11px; font-weight: 600; line-height: 16px; display: inline-block; }
+.dmtt-seg-n.is-alert { opacity: 1; min-width: 14px; height: 14px; padding: 0 4px; margin-left: 0; box-sizing: border-box; border-radius: 7px; background: #ff3b30; color: #fff; font-family: "gg sans", "Noto Sans", -apple-system, "Segoe UI", sans-serif; font-size: 10px; font-weight: 800; line-height: 14px; letter-spacing: 0; text-align: center; display: inline-block; -webkit-font-smoothing: antialiased; }
 .dmtt-fr { transition: background-color 1.2s ease; }
 .dmtt-flashwrap { position: relative; transition: background-color 1.2s ease; }
 .dmtt-flashwrap.is-flash, .dmtt-flashwrap.is-flash > .dmtt-card, .dmtt-flashwrap.is-flash > .dmtt-cell { background-color: rgba(10, 132, 255, .09); }
