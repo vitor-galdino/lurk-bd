@@ -23,7 +23,7 @@ const UPDATE_KEYS = [
 const CHANGELOG = [
   { version: "2.9.0", items: [
     ["new", "Pedidos de amizade: o Lurk lembra quem você já recusou e mostra \"Você recusou em…\" quando a pessoa pede de novo. No Filtro anti-spam dá para mandar essas pessoas direto para o Spam.", "Friend requests: Lurk remembers who you declined and shows \"You declined on…\" when they ask again. The Spam filter can send them straight to Spam."],
-    ["new", "Lista VIP: mapa de Frequência no perfil de cada VIP, mostrando em que dias e horários ele costuma ficar online nas últimas 4 semanas.", "VIP list: a Frequency map on each VIP's page showing which days and hours they're usually online over the last 4 weeks."],
+    ["new", "Lista VIP: botão Rotina no perfil de cada VIP, com o mapa de Frequência das últimas 4 semanas, horário e dia mais ativo, média online por dia, quando costuma entrar e sair, comparação com a semana passada, melhor horário pra falar, quando mais conversa e se usa PC ou celular.", "VIP list: a Routine button on each VIP's page with a Frequency map of the last 4 weeks, most active hours and day, daily online average, when they usually come online and leave, a comparison with last week, the best time to talk, when they talk the most and whether they use desktop or mobile."],
     ["new", "Modo discreto: esconde os botões do Lurk, a foto de quem está digitando e o \"offline há…\", e silencia os avisos, sem parar de registrar. Liga e desliga com Ctrl+Shift+L, e pode ligar sozinho quando você transmite a tela.", "Discreet mode: hides Lurk's buttons, the typing avatar and \"offline for…\", and silences notifications while still logging. Toggle it with Ctrl+Shift+L, and optionally turn it on automatically while you share your screen."],
   ] },
   { version: "2.8.3", items: [
@@ -2138,7 +2138,9 @@ const FREQ_WEEKS = 4;
 const freqBus = createBus();
 let freqCache = null;
 let freqDirty = false;
+let freqXCache = null;
 const getFreq = () => (freqCache ??= Data.load(k("vipFreq")) || {});
+const getFreqX = () => (freqXCache ??= Object.assign({ cov: {}, dev: {} }, Data.load(k("vipFreqX")) || {}));
 function weekStartOf(ms) { const d = new Date(ms); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); }
 const slotOf = (ms) => { const d = new Date(ms); return ((d.getDay() + 6) % 7) * 24 + d.getHours(); };
 function addFreqMinutes(id, at, minutes) {
@@ -2149,19 +2151,39 @@ function addFreqMinutes(id, at, minutes) {
   arr[slotOf(at)] += minutes;
   freqDirty = true;
 }
+const weekArr = (obj, wk) => obj[wk] || (obj[wk] = new Array(168).fill(0));
 function pruneFreq() {
   const all = getFreq();
+  const x = getFreqX();
   const keep = weekStartOf(Date.now()) - (FREQ_WEEKS - 1) * 7 * DAY;
   for (const id of Object.keys(all)) {
     if (!isVip(id)) { delete all[id]; freqDirty = true; continue; }
     for (const wk of Object.keys(all[id])) if (Number(wk) < keep) { delete all[id][wk]; freqDirty = true; }
   }
+  for (const wk of Object.keys(x.cov)) if (Number(wk) < keep) { delete x.cov[wk]; freqDirty = true; }
+  for (const id of Object.keys(x.dev)) {
+    if (!isVip(id)) { delete x.dev[id]; freqDirty = true; continue; }
+    for (const wk of Object.keys(x.dev[id])) if (Number(wk) < keep) { delete x.dev[id][wk]; freqDirty = true; }
+  }
 }
-function flushFreq() { if (!freqDirty) return; freqDirty = false; Data.save(k("vipFreq"), getFreq()); freqBus.emit(); }
+function flushFreq() { if (!freqDirty) return; freqDirty = false; Data.save(k("vipFreq"), getFreq()); Data.save(k("vipFreqX"), getFreqX()); freqBus.emit(); }
 function sampleFreq() {
+  const now = Date.now();
+  const wk = String(weekStartOf(now));
+  const slot = slotOf(now);
+  const x = getFreqX();
+  weekArr(x.cov, wk)[slot] += 1;
+  freqDirty = true;
   for (const id of Object.keys(getVipList())) {
-    const st = rawPresence(id)?.status;
-    if (st && st !== "offline") addFreqMinutes(id, Date.now(), 1);
+    const p = rawPresence(id);
+    if (!p?.status || p.status === "offline") continue;
+    addFreqMinutes(id, now, 1);
+    const pc = p.devices.some((d) => d === "desktop" || d === "web");
+    const mob = p.devices.includes("mobile");
+    if (!pc && !mob) continue;
+    const u = x.dev[id] || (x.dev[id] = {});
+    const w = u[wk] || (u[wk] = { p: new Array(168).fill(0), m: new Array(168).fill(0) });
+    w[pc ? "p" : "m"][slot] += 1;
   }
 }
 function seedFreq() {
@@ -2186,6 +2208,69 @@ function freqMatrix(id) {
   const sum = new Array(168).fill(0);
   for (const wk of weeks) u[wk].forEach((v, i) => { sum[i] += v; });
   return { sum, weeks: weeks.length, total: sum.reduce((a, b) => a + b, 0) };
+}
+const hourSums = (arr168) => { const out = new Array(24).fill(0); arr168.forEach((v, i) => { out[i % 24] += v; }); return out; };
+function bestWindow(hours, len) {
+  let best = -1; let at = 0;
+  for (let i = 0; i < 24; i++) { let t = 0; for (let j = 0; j < len; j++) t += hours[(i + j) % 24]; if (t > best) { best = t; at = i; } }
+  return { from: at, to: (at + len) % 24, total: best };
+}
+const median = (arr) => { const a = [...arr].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
+function routineOf(id) {
+  const now = Date.now();
+  const u = getFreq()[id] || {};
+  const x = getFreqX();
+  const { sum, weeks, total } = freqMatrix(id);
+  const hours = hourSums(sum);
+  const daysTot = Array.from({ length: 7 }, (_, d) => sum.slice(d * 24, d * 24 + 24).reduce((a, b) => a + b, 0));
+  let coveredDays = 0;
+  for (const wk of new Set([...Object.keys(u), ...Object.keys(x.cov)])) {
+    for (let d = 0; d < 7; d++) {
+      const start = Number(wk) + d * DAY;
+      if (start > now) continue;
+      const on = (u[wk] || []).slice(d * 24, d * 24 + 24).some((v) => v > 0);
+      const cv = (x.cov[wk] || []).slice(d * 24, d * 24 + 24).some((v) => v > 0);
+      if (on || cv) coveredDays++;
+    }
+  }
+  const curWk = weekStartOf(now);
+  const slotNow = slotOf(now);
+  const thisWeek = (u[String(curWk)] || []).reduce((a, b) => a + b, 0);
+  const prevArr = u[String(curWk - 7 * DAY)];
+  const prevSame = prevArr ? prevArr.slice(0, slotNow + 1).reduce((a, b) => a + b, 0) : null;
+  const covSum = new Array(168).fill(0);
+  for (const wk of Object.keys(x.cov)) x.cov[wk].forEach((v, i) => { covSum[i] += v; });
+  const onWithCov = new Array(168).fill(0);
+  for (const wk of Object.keys(x.cov)) (u[wk] || []).forEach((v, i) => { onWithCov[i] += v; });
+  const covH = hourSums(covSum); const onH = hourSums(onWithCov);
+  const chance = covH.map((c, i) => (c >= 20 ? Math.min(1, onH[i] / c) : null));
+  const talk = new Array(24).fill(0);
+  const since = now - FREQ_WEEKS * 7 * DAY;
+  for (const m of loadVip().messages) if (m.userId === id && (m.createdAt || 0) >= since) talk[new Date(m.createdAt).getHours()]++;
+  for (const r of getHistory()) if (r.userId === id && (r.startedAt || 0) >= since) talk[new Date(r.startedAt).getHours()]++;
+  const devP = new Array(24).fill(0); const devM = new Array(24).fill(0);
+  for (const w of Object.values(x.dev[id] || {})) { w.p.forEach((v, i) => { devP[i % 24] += v; }); w.m.forEach((v, i) => { devM[i % 24] += v; }); }
+  const pres = loadVip().events.filter((e) => e.userId === id && e.type === "presence" && e.at >= since).sort((a, b) => a.at - b.at);
+  const sessions = [];
+  for (const e of pres) {
+    const online = e.to && e.to !== "offline";
+    const last = sessions[sessions.length - 1];
+    if (online) { if (last && last.end != null && e.at - last.end < 30 * 60000) last.end = null; else if (!last || last.end != null) sessions.push({ start: e.at, end: null }); }
+    else if (last && last.end == null) last.end = e.at;
+  }
+  const SHIFT = 5 * 3600000;
+  const perDay = new Map();
+  for (const ss of sessions) {
+    if (ss.end == null) continue;
+    const key = startOfDay(ss.start - SHIFT);
+    const d = perDay.get(key) || { first: Infinity, last: 0 };
+    d.first = Math.min(d.first, ss.start - key); d.last = Math.max(d.last, ss.end - key);
+    perDay.set(key, d);
+  }
+  const days = [...perDay.values()];
+  const firstOn = days.length >= 3 ? median(days.map((d) => d.first)) : null;
+  const lastOff = days.length >= 3 ? median(days.map((d) => d.last)) : null;
+  return { sum, weeks, total, hours, daysTot, coveredDays, thisWeek, prevSame, chance, talk, devP, devM, firstOn, lastOff };
 }
 const profileBus = createBus();
 const getProfileLog = () => Data.load(k("vipProfileLog")) || [];
@@ -2628,6 +2713,7 @@ const SI = {
   shield: "M12 2.5l7.5 3v6c0 4.6-3.2 8.4-7.5 10-4.3-1.6-7.5-5.4-7.5-10v-6z",
   storage: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36L21 8M21 3v5h-5",
+  routine: "M8 2v3M16 2v3M4 5h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 10h18M7 14h2M11 14h2M15 14h2M7 17.5h2M11 17.5h2",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
 };
 const LURK_ICON = () => SI[getSettings().lurkIcon] || SI.ghost;
@@ -2810,6 +2896,7 @@ function screenTitle(s) {
   switch (s.type) {
     case "person": return nameOf(s.userId, getHistory().find((r) => r.userId === s.userId) || {});
     case "vipPerson": return nameOf(s.userId, getVipList()[s.userId] || {});
+    case "vipRoutine": return nameOf(s.userId, getVipList()[s.userId] || {});
     case "callPerson": return nameOf(s.userId);
     case "archives": return L("Mensagens antigas", "Old messages");
     case "archiveBlock": { const a = getArchives().find((x) => x.file === s.file); return a ? archivePeriod(a) : L("Arquivo", "Archive"); }
@@ -2913,6 +3000,7 @@ function ScreenRouter({ s }) {
     case "spam": return h(SpamListScreen);
     case "vip": return h(VipScreen);
     case "vipPerson": return h(VipPersonScreen, { userId: s.userId });
+    case "vipRoutine": return h(VipRoutineScreen, { userId: s.userId });
     case "calls": return h(CallsScreen);
     case "callPerson": return h(CallPersonScreen, { userId: s.userId });
     case "settings": return h(SettingsScreen);
@@ -4011,6 +4099,76 @@ function FrequencyMap({ id }) {
       [0, 6, 12, 18, 23].map((hr) => h("span", { key: `l${hr}`, className: "dmtt-freq-hour", style: { gridColumn: `${hr + 2} / span 1` } }, `${hr}h`)))
       : h("div", { className: "dmtt-freq-empty" }, L("Ainda coletando. Vai preenchendo conforme o VIP fica online com o seu Discord aberto.", "Still collecting. It fills in as this VIP is online while your Discord is open.")));
 }
+const fmtClock = (ms) => { const m = Math.round((ms % DAY) / 1800000) * 30; return `${Math.floor(m / 60) % 24}h${m % 60 ? "30" : ""}`; };
+const fmtMin = (m) => (m ? fmtDur(m * 60000) : "0 min");
+const hrRange = (a, b) => `${a}h–${b === 0 ? 24 : b}h`;
+const WEEKDAYS_FULL = () => L(["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"], ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+function HourBars({ title, sub, series, tip, empty }) {
+  const totals = Array.from({ length: 24 }, (_, i) => series.reduce((a, s) => a + s.values[i], 0));
+  const max = Math.max(...totals, 0);
+  return h("div", { className: "dmtt-freq dmtt-freq-block" },
+    h("div", { className: "dmtt-freq-head" }, h("span", { className: "dmtt-freq-title" }, title), sub ? h("span", { className: "dmtt-freq-sub" }, sub) : null),
+    max ? h(React.Fragment, null,
+      h("div", { className: "dmtt-hbars" }, totals.map((t, i) => h("span", { key: i, className: "dmtt-hbar", title: tip(i) },
+        series.map((s) => s.values[i] ? h("span", { key: s.key, style: { height: `${(s.values[i] / max) * 100}%`, background: s.color } }) : null)))),
+      h("div", { className: "dmtt-hbars-axis" }, [0, 6, 12, 18, 23].map((hr) => h("span", { key: hr, style: { gridColumn: `${hr + 1} / span 1` } }, `${hr}h`))),
+      series.length > 1 ? h("div", { className: "dmtt-legend" }, series.map((s) => h("span", { key: s.key }, h("i", { style: { background: s.color } }), s.label))) : null)
+      : h("div", { className: "dmtt-freq-empty" }, empty));
+}
+function VipRoutineScreen({ userId: id }) {
+  useBus(freqBus, vipBus);
+  const entry = getVipList()[id];
+  if (!entry) return h(Empty, { icon: "star", title: L("Não está mais na Lista VIP", "No longer on your VIP list") });
+  const r = routineOf(id);
+  const name = nameOf(id, entry);
+  const collecting = L("Ainda coletando…", "Still collecting…");
+  const avgDay = r.coveredDays ? (r.total / r.coveredDays) * 60000 : 0;
+  const diff = r.prevSame == null ? null : (r.thisWeek - r.prevSame) * 60000;
+  const diffTxt = diff == null ? "—" : Math.abs(diff) < 60000 ? L("igual", "same") : `${diff > 0 ? "+" : "−"}${fmtDur(Math.abs(diff))}`;
+  const peak = r.total ? bestWindow(r.hours, 2) : null;
+  const di = r.total ? r.daysTot.indexOf(Math.max(...r.daysTot)) : -1;
+  const chanceList = r.chance.map((c, i) => ({ i, c })).filter((x) => x.c != null);
+  const windows = [];
+  if (chanceList.length >= 3) {
+    const ch = r.chance.map((c) => c ?? 0);
+    const used = new Set();
+    for (let n = 0; n < 2; n++) {
+      let best = null;
+      for (let i = 0; i < 24; i++) {
+        if (used.has(i) || used.has((i + 1) % 24) || r.chance[i] == null || r.chance[(i + 1) % 24] == null) continue;
+        const v = (ch[i] + ch[(i + 1) % 24]) / 2;
+        if (!best || v > best.v) best = { i, v };
+      }
+      if (!best || best.v < 0.05) break;
+      for (let j = -1; j <= 2; j++) used.add((best.i + j + 24) % 24);
+      windows.push(best);
+    }
+  }
+  const talkTop = r.talk.some(Boolean) ? bestWindow(r.talk, 2) : null;
+  const devTot = r.devP.reduce((a, b) => a + b, 0) + r.devM.reduce((a, b) => a + b, 0);
+  const mobPct = devTot ? Math.round((r.devM.reduce((a, b) => a + b, 0) / devTot) * 100) : null;
+  const row = (title, detail) => h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, title)), h("span", { className: "dmtt-row-detail" }, detail));
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: L("Rotina", "Routine"), subtitle: L(`${name} · últimas ${FREQ_WEEKS} semanas`, `${name} · last ${FREQ_WEEKS} weeks`) }),
+    h(Stats, { items: [[avgDay >= 60000 ? fmtDur(avgDay) : "—", L("média por dia", "daily average")], [r.thisWeek ? fmtDur(r.thisWeek * 60000) : "0 min", L("esta semana", "this week")], [diffTxt, L("vs. semana passada", "vs. last week")]] }),
+    h("div", { className: "dmtt-routine-map" }, h(FrequencyMap, { id })),
+    h(Group, { header: L("Hábitos", "Habits"), footer: L("A comparação com a semana passada usa o mesmo período (até este dia e hora).", "The comparison with last week covers the same period (up to this day and hour).") },
+      row(L("Horário mais ativo", "Most active hours"), peak ? hrRange(peak.from, peak.to) : collecting),
+      row(L("Dia mais ativo", "Most active day"), di >= 0 ? WEEKDAYS_FULL()[di] : collecting),
+      row(L("Costuma entrar", "Usually comes online"), r.firstOn != null ? L(`por volta das ${fmtClock(r.firstOn)}`, `around ${fmtClock(r.firstOn)}`) : collecting),
+      row(L("Costuma sair", "Usually goes offline"), r.lastOff != null ? L(`por volta das ${fmtClock(r.lastOff)}`, `around ${fmtClock(r.lastOff)}`) : collecting)),
+    h(Group, { header: L("Melhor horário pra falar", "Best time to talk"), footer: L(`Chance de ${name} estar online nos horários em que você costuma estar com o Discord aberto.`, `How likely ${name} is to be online at the times you usually have Discord open.`) },
+      windows.length ? windows.map((w) => row(hrRange(w.i, (w.i + 2) % 24), L(`online ${Math.round(w.v * 100)}% das vezes`, `online ${Math.round(w.v * 100)}% of the time`)))
+        : h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-sub" }, L("Ainda coletando. Precisa de alguns dias com o seu Discord aberto em horários diferentes.", "Still collecting. It needs a few days of your Discord being open at different times."))))),
+    h(HourBars, { title: L("Quando mais conversa", "When they talk the most"), sub: talkTop ? hrRange(talkTop.from, talkTop.to) : null,
+      series: [{ key: "t", color: "var(--c-link)", values: r.talk }],
+      tip: (i) => L(`${pad(i)}h · ${r.talk[i]} ${plural(r.talk[i], "mensagem ou digitação", "mensagens ou digitações")}`, `${pad(i)}h · ${r.talk[i]} ${plural(r.talk[i], "message or typing", "messages or typing")}`),
+      empty: L("Nenhuma mensagem ou digitação registrada nas últimas 4 semanas.", "No messages or typing logged in the last 4 weeks.") }),
+    h(HourBars, { title: L("PC ou celular", "Desktop or mobile"), sub: mobPct != null ? L(`${mobPct}% no celular`, `${mobPct}% on mobile`) : null,
+      series: [{ key: "p", color: "#5865f2", values: r.devP, label: "PC" }, { key: "m", color: "#bf5af2", values: r.devM, label: L("Celular", "Mobile") }],
+      tip: (i) => `${pad(i)}h · PC ${fmtMin(r.devP[i])} · ${L("Celular", "Mobile")} ${fmtMin(r.devM[i])}`,
+      empty: L("Ainda coletando. Vai preenchendo conforme o VIP fica online com o seu Discord aberto.", "Still collecting. It fills in as this VIP is online while your Discord is open.") }));
+}
 function WatchProfileRow({ id }) {
   useBus(profileBus);
   const watch = getProfileWatch();
@@ -4051,9 +4209,10 @@ function VipPersonScreen({ userId: id }) {
   const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")]];
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
-    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: h(FrequencyMap, { id }) },
+    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips },
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
       typing.length ? h(ActionButton, { icon: h(SIcon, { d: SI.keyboard, size: 18 }), label: NAMES.typing(), onClick: () => nav.push({ type: "person", userId: id }) }) : null,
+      h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.star, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível", "invisible")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
@@ -4845,10 +5004,19 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-freq-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 .dmtt-freq-title { font-size: 13px; font-weight: 600; color: var(--c-strong); }
 .dmtt-freq-sub { font-size: 11px; color: var(--c-muted); }
-.dmtt-freq-grid { display: grid; grid-template-columns: 26px repeat(24, 1fr); gap: 2px; align-items: center; }
+.dmtt-freq-grid { display: grid; grid-template-columns: 26px repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
 .dmtt-freq-day { font-size: 10px; color: var(--c-muted); line-height: 1; }
 .dmtt-freq-cell { aspect-ratio: 1; border-radius: 2px; background: var(--c-fill2, rgba(120,120,128,.18)); }
 .dmtt-freq-hour { font-size: 9px; color: var(--c-muted); margin-top: 2px; white-space: nowrap; }
+.dmtt-freq-hour:last-child, .dmtt-hbars-axis > span:last-child { justify-self: end; }
+.dmtt-routine-map > .dmtt-freq { margin: 0; }
+.dmtt-freq-block { margin: 0; padding: 12px 12px 10px; }
+.dmtt-hbars { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; height: 64px; align-items: end; }
+.dmtt-hbar { display: flex; flex-direction: column-reverse; height: 100%; border-radius: 2px; background: var(--c-fill2, rgba(120,120,128,.18)); overflow: hidden; }
+.dmtt-hbar > span { display: block; width: 100%; flex: none; }
+.dmtt-hbars-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); font-size: 9px; color: var(--c-muted); margin-top: 3px; white-space: nowrap; }
+.dmtt-legend { display: flex; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--c-muted); }
+.dmtt-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 .dmtt-freq-empty { font-size: 12px; color: var(--c-muted); line-height: 1.4; }
 .dmtt-tag.is-purple { background: rgba(191, 90, 242, .16); color: #bf5af2; }
 .dmtt-tag.is-orange { background: rgba(255, 159, 10, .16); color: #ff9f0a; }
