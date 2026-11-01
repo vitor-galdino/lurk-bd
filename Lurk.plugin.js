@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.9.1
+ * @version 2.9.2
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.9.1";
+const VERSION = "2.9.2";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.9.2", items: [
+    ["improved", "Digitou e apagou nos servidores agora vem desligado e mostra os riscos antes de ligar. Ele foi desligado para todos nesta atualização; para usar de novo, ligue em Ajustes › Lista VIP.", "Typed & quit in servers is now off by default and shows the risks before you turn it on. This update turns it off for everyone; to use it again, turn it on in Settings › VIP list."],
+    ["improved", "O Lurk busca o perfil dos VIPs bem menos vezes e um de cada vez, em vez de todos juntos.", "Lurk loads your VIPs' profiles far less often and one at a time instead of all at once."],
+    ["improved", "Recusar vários pedidos de uma vez agora vai com intervalos variados de 2 a 5 segundos e no máximo 25 por vez.", "Declining many requests at once now waits a varied 2 to 5 seconds between each, up to 25 at a time."],
+  ] },
   { version: "2.9.1", items: [
     ["fixed", "Discord PTB e Canary agora guardam os dados do Lurk separados do Discord principal. A Lista VIP e o resto não somem mais quando os dois estão abertos ao mesmo tempo. Na primeira vez, eles começam com uma cópia dos dados do principal.", "Discord PTB and Canary now keep Lurk's data separate from the main Discord. Your VIP list and everything else no longer get lost when both are open at the same time. On first run they start with a copy of the main client's data."],
   ] },
@@ -210,7 +215,7 @@ const DEFAULTS = {
   discordSound: "message1",
   soundVolume: 40,
 
-  vipTrackServers: true,
+  vipTrackServers: false,
   vipRecordMessages: true,
   vipToast: true,
   vipDesktop: true,
@@ -1507,11 +1512,32 @@ function applyVoiceFlags(sess, vs) {
 }
 
 const profileFetchedAt = new Map();
+const vipProfileQueue = [];
+let vipProfileBusy = false;
 function ensureProfile(uid) {
   if (!ProfileActions) return;
-  if (Date.now() - (profileFetchedAt.get(uid) || 0) < 30 * 60000) return;
+  if (Date.now() - (profileFetchedAt.get(uid) || 0) < 6 * 3600000) return;
   profileFetchedAt.set(uid, Date.now());
-  try { const r = ProfileActions.fetchProfile(uid, { withMutualGuilds: true }); r?.catch?.(() => {}); } catch {}
+  if (!vipProfileQueue.includes(uid)) vipProfileQueue.push(uid);
+  runVipProfileQueue();
+}
+async function runVipProfileQueue() {
+  if (vipProfileBusy) return;
+  vipProfileBusy = true;
+  while (vipProfileQueue.length && lurkAlive) {
+    const uid = vipProfileQueue.shift();
+    const s = getSettings();
+    if (!s.vipTrackServers || !s.vipSubscribeTyping || !isVip(uid)) continue;
+    try { await ProfileActions.fetchProfile(uid, { withMutualGuilds: true }); } catch {}
+    if (vipProfileQueue.length) await new Promise((r) => setTimeout(r, 5000 + Math.random() * 5000));
+  }
+  if (!lurkAlive) vipProfileQueue.length = 0;
+  vipProfileBusy = false;
+}
+function migrateServerTyping() {
+  if (Data.load("serverTypingOff")) return;
+  if (getSettings().vipTrackServers) setSetting("vipTrackServers", false);
+  Data.save("serverTypingOff", Date.now());
 }
 function mutualGuildIds(uid) {
   const ids = new Set();
@@ -2148,7 +2174,7 @@ async function bulkDecline(ids, kind) {
     }
     bulk.done++;
     friendsBus.emit();
-    await new Promise((r) => setTimeout(r, 1000));
+    if (bulk.done < bulk.total) await new Promise((r) => setTimeout(r, 2000 + Math.random() * 3000));
   }
   const { done, failed, cancel } = bulk;
   Object.assign(bulk, { running: false, kind: null, cancel: false });
@@ -2165,8 +2191,14 @@ function BulkProgress() {
       h("span", { className: "dmtt-bar" }, h("span", { style: { width: `${Math.max(3, pct)}%` } }))),
     h("button", { className: "dmtt-link", onClick: () => { bulk.cancel = true; } }, L("Parar", "Stop"))));
 }
+const BULK_MAX = 25;
 function confirmBulk(ids, kind, label) {
-  confirmDanger(label, L(`Recusar ${ids.length} ${plural(ids.length, "pedido", "pedidos")}? Vai um por segundo pra não esbarrar no limite do Discord; você pode parar no meio.`, `Decline ${ids.length} ${plural(ids.length, "request", "requests")}? It goes one per second to stay within Discord's limits; you can stop midway.`), () => bulkDecline(ids, kind), L("Recusar", "Decline"));
+  const batch = ids.slice(0, BULK_MAX);
+  const extra = ids.length > BULK_MAX;
+  confirmDanger(label, extra
+    ? L(`Recusar os ${BULK_MAX} primeiros de ${ids.length} pedidos? Vai um de cada vez, com 2 a 5 segundos entre eles, e no máximo ${BULK_MAX} por rodada. Você pode parar no meio.`, `Decline the first ${BULK_MAX} of ${ids.length} requests? It goes one at a time, 2 to 5 seconds apart, up to ${BULK_MAX} per round. You can stop midway.`)
+    : L(`Recusar ${batch.length} ${plural(batch.length, "pedido", "pedidos")}? Vai um de cada vez, com 2 a 5 segundos entre eles. Você pode parar no meio.`, `Decline ${batch.length} ${plural(batch.length, "request", "requests")}? It goes one at a time, 2 to 5 seconds apart. You can stop midway.`),
+    () => bulkDecline(batch, kind), L("Recusar", "Decline"));
 }
 function initFriends() {
   if (!getSettings().friendsEnabled) return;
@@ -2870,7 +2902,8 @@ const txt = (v) => (typeof v === "function" ? v() : v);
 function SettingRow({ item }) {
   useBus(settingsBus);
   const value = getSettings()[item.id];
-  const set = (v) => { setSetting(item.id, v); item.after?.(v); };
+  const apply = (v) => { setSetting(item.id, v); item.after?.(v); };
+  const set = (v) => (v === true && item.confirmOn ? UI.showConfirmationModal(txt(item.confirmOn.title), txt(item.confirmOn.text), { danger: true, confirmText: txt(item.confirmOn.confirm), cancelText: L("Cancelar", "Cancel"), onConfirm: () => apply(v) }) : apply(v));
   if (item.type === "text") {
     return h("div", { className: "dmtt-row dmtt-row-col" },
       h("span", { className: "dmtt-row-title" }, txt(item.label)),
@@ -4382,8 +4415,10 @@ function settingsPages() {
     { id: "vip", title: NAMES.vip(), icon: "star", color: "#ffcc00", summary: () => L(`${Object.keys(getVipList()).length} pessoas`, `${Object.keys(getVipList()).length} people`),
       sections: [
         { title: L("Servidores", "Servers"), items: [
-          sw("vipTrackServers", L("Digitou e apagou nos servidores", "Typed & quit in servers")),
-          { ...sw("vipSubscribeTyping", L("Acompanhar todos os servidores em comum", "Watch all shared servers"), L("Experimental. Sem isto o Discord só avisa digitação dos servidores que você abriu.", "Experimental. Without it, Discord only reports typing in servers you've opened.")), after: (v) => v && scheduleSubscribe() },
+          { ...sw("vipTrackServers", L("Digitou e apagou nos servidores", "Typed & quit in servers"), L("Experimental e com risco. Fica desligado por padrão.", "Experimental and risky. Off by default.")), after: (v) => v && scheduleSubscribe(),
+            confirmOn: { title: () => L("Digitou e apagou nos servidores", "Typed & quit in servers"), confirm: () => L("Ligar mesmo assim", "Turn on anyway"),
+              text: () => L("Para ver quem digita nos servidores, o Lurk pede ao Discord a digitação de todos os servidores que você tem em comum com seus VIPs a cada 2 minutos, e busca o perfil deles de tempos em tempos. O Discord não faz isso sozinho, então esse padrão pode parecer automação e, no pior caso, levar a restrições na sua conta. Quanto mais VIPs, maior o uso. Use com moderação. Mensagens enviadas, editadas e apagadas nos servidores continuam sendo registradas sem isto.", "To see who types in servers, Lurk asks Discord for typing in every server you share with your VIPs every 2 minutes, and loads their profiles from time to time. Discord doesn't do this on its own, so the pattern can look like automation and, in the worst case, lead to restrictions on your account. The more VIPs, the more it's used. Use it sparingly. Messages sent, edited and deleted in servers are still logged without it.") } },
+          { ...sw("vipSubscribeTyping", L("Acompanhar todos os servidores em comum", "Watch all shared servers"), L("Experimental. Sem isto o Discord só avisa digitação dos servidores que você abriu.", "Experimental. Without it, Discord only reports typing in servers you've opened.")), after: (v) => v && scheduleSubscribe(), showIf: (st) => st.vipTrackServers },
           sw("vipRecordMessages", L("Registrar mensagens", "Log messages"), L("Texto e anexos, incluindo editadas e apagadas.", "Text and attachments, including edits and deletions.")),
           sw("vipRecordDMs", L("Incluir mensagens no privado", "Include DMs"))] },
         { title: L("Última vez online", "Last online"), footer: L("Aparece embaixo do nome dos VIPs. Só conta o que o Lurk viu com o seu Discord aberto.", "Shows under your VIPs' names. Only counts what Lurk saw while your Discord was open."), items: [
@@ -4477,7 +4512,7 @@ function SettingsPageScreen({ id }) {
   if (!page) return null;
   return h(React.Fragment, null,
     h(LargeTitle, { title: page.title }),
-    page.sections.map((sec, i) => h(Group, { key: i, header: sec.title, footer: sec.footer }, sec.items.map((item) => h(SettingRow, { key: item.id + i, item })))),
+    page.sections.map((sec, i) => h(Group, { key: i, header: sec.title, footer: sec.footer }, sec.items.filter((item) => !item.showIf || item.showIf(getSettings())).map((item) => h(SettingRow, { key: item.id + i, item })))),
     page.custom ? page.custom() : null);
 }
 
@@ -5150,6 +5185,7 @@ module.exports = class Lurk {
     this.freqInterval = setInterval(() => safe(() => { sampleFreq(); }), 60000);
     this.freqFlush = setInterval(() => safe(() => { pruneFreq(); flushFreq(); }), 5 * 60000);
     this.watchTimer = setTimeout(() => safe(() => checkWatchedProfile()), 20000);
+    safe(() => migrateServerTyping());
     scheduleSubscribe();
     this.subInterval = setInterval(subscribeVipGuilds, 120000);
     this.backupTimer = setTimeout(() => safe(() => runBackup(false)), 30000);
