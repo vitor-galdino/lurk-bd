@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.8.3
+ * @version 2.9.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.8.3";
+const VERSION = "2.9.0";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.9.0", items: [
+    ["new", "Pedidos de amizade: o Lurk lembra quem você já recusou e mostra \"Você recusou em…\" quando a pessoa pede de novo. No Filtro anti-spam dá para mandar essas pessoas direto para o Spam.", "Friend requests: Lurk remembers who you declined and shows \"You declined on…\" when they ask again. The Spam filter can send them straight to Spam."],
+    ["new", "Lista VIP: mapa de Frequência no perfil de cada VIP, mostrando em que dias e horários ele costuma ficar online nas últimas 4 semanas.", "VIP list: a Frequency map on each VIP's page showing which days and hours they're usually online over the last 4 weeks."],
+    ["new", "Modo discreto: esconde os botões do Lurk, a foto de quem está digitando e o \"offline há…\", e silencia os avisos, sem parar de registrar. Liga e desliga com Ctrl+Shift+L, e pode ligar sozinho quando você transmite a tela.", "Discreet mode: hides Lurk's buttons, the typing avatar and \"offline for…\", and silences notifications while still logging. Toggle it with Ctrl+Shift+L, and optionally turn it on automatically while you share your screen."],
+  ] },
   { version: "2.8.3", items: [
     ["improved", "Ao voltar para a tela anterior, o Lurk volta na mesma aba, com os mesmos filtros e na mesma posição da lista. Tudo volta ao padrão quando você fecha e abre de novo.", "Going back returns you to the same tab, filters and scroll position you left. Everything resets when you close and reopen Lurk."],
   ] },
@@ -226,6 +231,10 @@ const DEFAULTS = {
   friendsNewDays: 90,
   friendsBotDays: 30,
   spamHideBots: false,
+  spamDeclined: false,
+  discreet: false,
+  discreetAuto: false,
+  discreetKey: "Ctrl+Shift+L",
   showToolbarButton: true,
   showBadge: true,
 };
@@ -927,6 +936,29 @@ function isPlaying() {
   } catch { return false; }
 }
 
+const discreet = { streaming: false };
+const discreetActive = () => { const s = getSettings(); return !!(s.discreet || (s.discreetAuto && discreet.streaming)); };
+function checkMyStream() {
+  const vs = safe(() => VoiceStateStore?.getVoiceStateForUser?.(myId()));
+  const on = !!(vs && (vs.selfStream ?? vs.self_stream));
+  if (on !== discreet.streaming) { discreet.streaming = on; safe(() => syncDOM()); }
+}
+const comboOf = (e) => {
+  const key = e.key?.length === 1 ? e.key.toUpperCase() : e.key;
+  if (!key || ["Control", "Shift", "Alt", "Meta"].includes(key)) return null;
+  return [e.ctrlKey ? "Ctrl" : null, e.altKey ? "Alt" : null, e.shiftKey ? "Shift" : null, e.metaKey ? "Meta" : null, key].filter(Boolean).join("+");
+};
+let recordingShortcut = null;
+function onDiscreetKey(e) {
+  const combo = comboOf(e);
+  if (!combo) return;
+  if (recordingShortcut) { e.preventDefault(); e.stopPropagation(); recordingShortcut(combo); return; }
+  if (combo !== getSettings().discreetKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setSetting("discreet", !getSettings().discreet);
+  safe(() => syncDOM());
+}
 function focusActive() {
   const s = getSettings();
   if (!s.focusMode) return false;
@@ -937,7 +969,7 @@ function focusActive() {
   return false;
 }
 function notify({ title, text, icon, onClick, toast: toastOn, desktop, sound }) {
-  if (!(toastOn || desktop || sound) || focusActive()) return;
+  if (!(toastOn || desktop || sound) || focusActive() || discreetActive()) return;
   if (toastOn) toast(text, { type: "info", timeout: 6000 });
   if (desktop) {
     try {
@@ -1936,9 +1968,10 @@ function requestInfo(id) {
   let left = false;
   if (spamGuild) stickSpam(id, spamGuild);
   else { const st = getSpamSticky()[id]; if (st && ignored.includes(st)) { spamGuild = st; left = true; } }
-  const spam = spamGuild ? { why: "guild", guildId: spamGuild, left } : bot && s.spamHideBots ? { why: "bot" } : null;
+  const declined = getDeclined()[id] || null;
+  const spam = spamGuild ? { why: "guild", guildId: spamGuild, left } : declined && s.spamDeclined ? { why: "declined" } : bot && s.spamHideBots ? { why: "bot" } : null;
   return {
-    id, sentAt: requestSentAt(id), created, ageDays, bot, fresh, spam, prof,
+    id, sentAt: requestSentAt(id), created, ageDays, bot, fresh, spam, prof, declined,
     name: u?.globalName || u?.global_name || pend.globalName || u?.username || pend.username || id,
     username: u?.username || pend.username || null,
     avatarURL: u ? avatarOf(u, id) : pend.avatarURL || null,
@@ -1979,8 +2012,22 @@ function checkRemovedWhileAway() {
   }
   snapshotFriends();
 }
+const getDeclined = () => Data.load(k("declinedReqs")) || {};
+function recordDeclined(id, user) {
+  const all = getDeclined();
+  const cur = all[id] || { count: 0, firstAt: Date.now() };
+  const snap = snapshotUser(id, user);
+  all[id] = { ...cur, count: (cur.count || 0) + 1, lastAt: Date.now(), username: snap.username || cur.username || null, globalName: snap.globalName || cur.globalName || null };
+  Data.save(k("declinedReqs"), all);
+  friendsBus.emit();
+}
 function onFriendRemoved(action) {
   try {
+    const rel = action?.relationship;
+    if (rel?.id && (rel.type === REL_PENDING_INCOMING || getPendingReqs()[rel.id] || reqFirstSeen.has(rel.id) || getProfileCache()[rel.id])) {
+      const mineAt = declinedByMe.get(rel.id);
+      if (mineAt && Date.now() - mineAt < 30000) recordDeclined(rel.id, rel.user);
+    }
     if (!getSettings().friendsEnabled) return;
     const id = action?.relationship?.id;
     if (!id) return;
@@ -2087,6 +2134,59 @@ function initFriends() {
   updateFriendsBadge();
 }
 
+const FREQ_WEEKS = 4;
+const freqBus = createBus();
+let freqCache = null;
+let freqDirty = false;
+const getFreq = () => (freqCache ??= Data.load(k("vipFreq")) || {});
+function weekStartOf(ms) { const d = new Date(ms); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); }
+const slotOf = (ms) => { const d = new Date(ms); return ((d.getDay() + 6) % 7) * 24 + d.getHours(); };
+function addFreqMinutes(id, at, minutes) {
+  const all = getFreq();
+  const u = all[id] || (all[id] = {});
+  const wk = String(weekStartOf(at));
+  const arr = u[wk] || (u[wk] = new Array(168).fill(0));
+  arr[slotOf(at)] += minutes;
+  freqDirty = true;
+}
+function pruneFreq() {
+  const all = getFreq();
+  const keep = weekStartOf(Date.now()) - (FREQ_WEEKS - 1) * 7 * DAY;
+  for (const id of Object.keys(all)) {
+    if (!isVip(id)) { delete all[id]; freqDirty = true; continue; }
+    for (const wk of Object.keys(all[id])) if (Number(wk) < keep) { delete all[id][wk]; freqDirty = true; }
+  }
+}
+function flushFreq() { if (!freqDirty) return; freqDirty = false; Data.save(k("vipFreq"), getFreq()); freqBus.emit(); }
+function sampleFreq() {
+  for (const id of Object.keys(getVipList())) {
+    const st = rawPresence(id)?.status;
+    if (st && st !== "offline") addFreqMinutes(id, Date.now(), 1);
+  }
+}
+function seedFreq() {
+  const all = getFreq();
+  const since = weekStartOf(Date.now()) - (FREQ_WEEKS - 1) * 7 * DAY;
+  const events = loadVip().events;
+  for (const id of Object.keys(getVipList())) {
+    if (all[id] && Object.keys(all[id]).length) continue;
+    const pres = events.filter((e) => e.userId === id && e.type === "presence").sort((a, b) => a.at - b.at);
+    for (let i = 0; i < pres.length; i++) {
+      if (pres[i].to === "offline") continue;
+      const end = Math.min(pres[i + 1]?.at || Date.now(), Date.now());
+      for (let t = Math.max(pres[i].at, since); t < end; t += 60000) addFreqMinutes(id, t, 1);
+    }
+    if (!all[id]) all[id] = {};
+  }
+  flushFreq();
+}
+function freqMatrix(id) {
+  const u = getFreq()[id] || {};
+  const weeks = Object.keys(u);
+  const sum = new Array(168).fill(0);
+  for (const wk of weeks) u[wk].forEach((v, i) => { sum[i] += v; });
+  return { sum, weeks: weeks.length, total: sum.reduce((a, b) => a + b, 0) };
+}
 const profileBus = createBus();
 const getProfileLog = () => Data.load(k("vipProfileLog")) || [];
 function addProfileEvents(evs) {
@@ -2658,12 +2758,13 @@ function SettingRow({ item }) {
       item.note ? h("span", { className: "dmtt-row-sub" }, txt(item.note)) : null),
     control);
 }
-function Hero({ userId, url, status, name, username, chips, children }) {
+function Hero({ userId, url, status, name, username, chips, children, below }) {
   return h("div", { className: "dmtt-hero" },
     h(Avatar, { userId, url, status, size: 72 }),
     h("div", { className: "dmtt-hero-name" }, name),
     username ? h("div", { className: "dmtt-hero-user" }, `@${username}`) : null,
     chips?.length ? h("div", { className: "dmtt-chips" }, chips.map((c, i) => h("span", { key: i, className: "dmtt-chip" }, c))) : null,
+    below || null,
     children ? h("div", { className: "dmtt-actions" }, children) : null);
 }
 function ActionButton({ icon, label, onClick, tone }) {
@@ -3206,7 +3307,7 @@ function RequestRow({ r, isNew, showSpamWhy }) {
   const pending = !p.loaded;
   const created = r.created ? new Date(r.created).toLocaleDateString(dateLocale(), { day: "2-digit", month: "long", year: "numeric" }) : null;
   const sent = new Date(r.sentAt).toLocaleString(dateLocale(), { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  const spamTag = showSpamWhy && r.spam?.why === "guild" ? L(`Servidor ignorado: ${guildName(r.spam.guildId)}${r.spam.left ? " (saiu)" : ""}`, `Ignored server: ${guildName(r.spam.guildId)}${r.spam.left ? " (left)" : ""}`) : null;
+  const spamTag = showSpamWhy && r.spam?.why === "declined" ? L("Já recusado", "Declined before") : showSpamWhy && r.spam?.why === "guild" ? L(`Servidor ignorado: ${guildName(r.spam.guildId)}${r.spam.left ? " (saiu)" : ""}`, `Ignored server: ${guildName(r.spam.guildId)}${r.spam.left ? " (left)" : ""}`) : null;
   return h("div", { ref, className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}` },
     h(Avatar, { userId: r.id, url: r.avatarURL, size: 40 }),
     h("span", { className: "dmtt-row-main" },
@@ -3219,7 +3320,8 @@ function RequestRow({ r, isNew, showSpamWhy }) {
           hover: pending ? L("Carregando amigos em comum…", "Loading mutual friends…") : h(HoverList, { title: L("Amigos em comum", "Mutual friends"), items: p.friendNames || [], empty: mf == null ? L("Não foi possível carregar", "Couldn't load") : L("Nenhum", "None") }) }),
         h(FactChip, { icon: FR_ICONS.servers, value: String(mg.length), muted: !mg.length,
           hover: h(HoverList, { title: L("Servidores em comum", "Mutual servers"), items: mg.map(guildName), empty: L("Nenhum", "None") }) })),
-      (r.bot || r.fresh || spamTag) ? h("span", { className: "dmtt-fr-tags" },
+      (r.bot || r.fresh || spamTag || r.declined) ? h("span", { className: "dmtt-fr-tags" },
+        r.declined ? h("span", { className: "dmtt-tag is-purple", title: L(`Recusado ${r.declined.count}× · primeira vez em ${fmtDate(r.declined.firstAt).slice(0, 10)}`, `Declined ${r.declined.count}× · first on ${fmtDate(r.declined.firstAt).slice(0, 10)}`) }, r.declined.count > 1 ? L(`Recusado ${r.declined.count}×`, `Declined ${r.declined.count}×`) : L(`Você recusou em ${fmtDate(r.declined.lastAt).slice(0, 5)}`, `You declined on ${new Date(r.declined.lastAt).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit" })}`)) : null,
         r.bot ? h("span", { className: "dmtt-tag is-red" }, L("Possível bot", "Possible bot")) : null,
         r.fresh ? h("span", { className: "dmtt-tag is-orange" }, L("Conta nova", "New account")) : null,
         spamTag ? h("span", { className: "dmtt-tag" }, spamTag) : null) : null,
@@ -3257,7 +3359,7 @@ function FriendsScreen({ tab: initialTab }) {
   const removed = getRemovedFriends();
   const newReq = opened.has("requests") ? 0 : shown.filter((r) => r.sentAt > seen.req).length;
   const newRem = opened.has("removed") ? 0 : removed.filter((r) => r.at > seen.rem).length;
-  const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0);
+  const rules = getSpamGuilds().length + (getSettings().spamHideBots ? 1 : 0) + (getSettings().spamDeclined ? 1 : 0);
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.friends(), subtitle: L("Pedidos de amizade e quem te removeu", "Friend requests and who removed you") }),
     h(Segmented, { value: tab, onChange: setTab, options: [["requests", L("Novos pedidos", "New requests"), newReq || null, true], ["removed", L("Te removeram", "Removed you"), newRem || null, true]] }),
@@ -3298,6 +3400,8 @@ function SpamFilterScreen() {
   const iconOf = (g) => (g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.webp?size=64` : null);
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.spamFilter(), subtitle: L("O que cair aqui vai para Spam em vez de aparecer nos novos pedidos", "Anything caught here goes to Spam instead of New requests") }),
+    h(Group, { header: L("Pedidos repetidos", "Repeat requests"), footer: L("Quem você já recusou antes e mandou pedido de novo.", "People you declined before who sent a request again.") },
+      h(SettingRow, { item: sw("spamDeclined", L("Mandar quem eu já recusei para Spam", "Move people I declined to Spam")) })),
     h(Group, { header: L("Possíveis bots", "Possible bots"), footer: L(`Conta com até ${getSettings().friendsBotDays} dias, sem amigos em comum, sem contas conectadas e sem Nitro.`, `Account up to ${getSettings().friendsBotDays} days old, with no mutual friends, no connected accounts and no Nitro.`) },
       h(SettingRow, { item: sw("spamHideBots", L("Mandar possíveis bots para Spam", "Move possible bots to Spam")) })),
     h(Group, { header: L(`Servidores ignorados${selected.length ? ` (${selected.length})` : ""}`, `Ignored servers${selected.length ? ` (${selected.length})` : ""}`), footer: L("Pedidos de quem está nesses servidores vão para Spam. Se a pessoa sair do servidor depois de mandar o pedido, ela continua no Spam.", "Requests from people in these servers go to Spam. If they leave the server after sending the request, they stay in Spam.") },
@@ -3496,6 +3600,26 @@ function MessageResults({ list, limit, setLimit, emptyTitle }) {
     list.length ? h(DayList, { items: list.slice(0, limit), getTime: (m) => m.createdAt, render: (m) => h(MessageEntry, { key: m.id, m, body: msgBody(m), edited: m.edits?.length > 0, who: true }) })
       : h(Empty, { icon: "search", title: emptyTitle }),
     list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 50) }, L("Mostrar mais", "Show more")) : null);
+}
+function ShortcutRow() {
+  useBus(settingsBus);
+  const [rec, setRec] = React.useState(false);
+  React.useEffect(() => () => { recordingShortcut = null; }, []);
+  const start = () => {
+    setRec(true);
+    recordingShortcut = (combo) => {
+      recordingShortcut = null;
+      setRec(false);
+      if (combo === "Escape") return;
+      if (!/(Ctrl|Alt|Meta)\+/.test(combo)) { toast(L("Use uma combinação com Ctrl ou Alt.", "Use a combination with Ctrl or Alt."), { type: "warning" }); return; }
+      setSetting("discreetKey", combo);
+    };
+  };
+  return h(Group, { header: L("Atalho", "Shortcut"), footer: L("Liga e desliga o modo discreto de qualquer lugar do Discord. Clique e aperte a nova combinação (Esc cancela).", "Turns discreet mode on and off from anywhere in Discord. Click, then press the new combination (Esc cancels).") },
+    h("div", { className: "dmtt-row" },
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Ligar/desligar", "Toggle"))),
+      h("button", { className: `dmtt-kbd ${rec ? "is-rec" : ""}`, onClick: start }, rec ? L("Aperte as teclas…", "Press keys…") : getSettings().discreetKey),
+      getSettings().discreetKey !== DEFAULTS.discreetKey && !rec ? h("button", { className: "dmtt-link", onClick: () => setSetting("discreetKey", DEFAULTS.discreetKey) }, L("Padrão", "Default")) : null));
 }
 function StorageArchiveLink() {
   useBus(archiveBus);
@@ -3865,6 +3989,28 @@ function VipAlerts({ id, toggles }) {
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
       h(Switch, { checked: vipFlag(id, f), onChange: (v) => setVip(id, { [f]: v }), label: l }))) : null);
 }
+const WEEKDAYS = () => L(["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"], ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+function FrequencyMap({ id }) {
+  useBus(freqBus);
+  const { sum, weeks, total } = freqMatrix(id);
+  const days = WEEKDAYS();
+  const max = Math.max(...sum, 1);
+  const avg = (m) => (weeks ? Math.round(m / weeks) : 0);
+  return h("div", { className: "dmtt-freq" },
+    h("div", { className: "dmtt-freq-head" },
+      h("span", { className: "dmtt-freq-title" }, L("Frequência", "Frequency")),
+      h("span", { className: "dmtt-freq-sub" }, total ? L(`últimas ${Math.min(weeks, FREQ_WEEKS)} ${plural(Math.min(weeks, FREQ_WEEKS), "semana", "semanas")}`, `last ${Math.min(weeks, FREQ_WEEKS)} ${plural(Math.min(weeks, FREQ_WEEKS), "week", "weeks")}`) : null)),
+    total ? h("div", { className: "dmtt-freq-grid" },
+      days.map((d, di) => h(React.Fragment, { key: d },
+        h("span", { className: "dmtt-freq-day" }, d),
+        sum.slice(di * 24, di * 24 + 24).map((m, hr) => {
+          const level = m ? Math.max(0.12, m / max) : 0;
+          return h("span", { key: hr, className: "dmtt-freq-cell", style: level ? { background: `rgba(35, 165, 90, ${(0.15 + level * 0.85).toFixed(2)})` } : null, title: `${d} ${pad(hr)}h · ${m ? L(`online em média ${fmtDur(avg(m) * 60000)} por semana`, `online ${fmtDur(avg(m) * 60000)} a week on average`) : L("nunca online", "never online")}` });
+        }))),
+      h("span", null),
+      [0, 6, 12, 18, 23].map((hr) => h("span", { key: `l${hr}`, className: "dmtt-freq-hour", style: { gridColumn: `${hr + 2} / span 1` } }, `${hr}h`)))
+      : h("div", { className: "dmtt-freq-empty" }, L("Ainda coletando. Vai preenchendo conforme o VIP fica online com o seu Discord aberto.", "Still collecting. It fills in as this VIP is online while your Discord is open.")));
+}
 function WatchProfileRow({ id }) {
   useBus(profileBus);
   const watch = getProfileWatch();
@@ -3905,7 +4051,7 @@ function VipPersonScreen({ userId: id }) {
   const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")]];
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
-    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips },
+    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: h(FrequencyMap, { id }) },
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
       typing.length ? h(ActionButton, { icon: h(SIcon, { d: SI.keyboard, size: 18 }), label: NAMES.typing(), onClick: () => nav.push({ type: "person", userId: id }) }) : null,
       h(ActionButton, { icon: h(SIcon, { d: SI.star, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
@@ -3998,6 +4144,12 @@ function settingsPages() {
         { id: "discordSound", label: L("Som do Discord", "Discord sound"), type: "select", options: () => DISCORD_SOUNDS.map((x) => [x, x]) },
         num("soundVolume", L("Volume", "Volume"), 0, 100, 5, "%")] }],
       custom: () => h(SoundExtras) },
+    { id: "discreet", title: L("Modo discreto", "Discreet mode"), icon: "eye", color: "#636366", summary: () => (discreetActive() ? L("Ligado", "On") : L("Desligado", "Off")),
+      sections: [
+        { footer: L("Esconde os botões do Lurk, os contadores, a foto de quem está digitando e o \"offline há…\", e silencia os avisos. O Lurk continua registrando tudo; para abrir, use Ajustes › Plugins.", "Hides Lurk's buttons, counters, the typing avatar and \"offline for…\", and silences notifications. Lurk keeps logging everything; open it from Settings › Plugins."),
+          items: [{ ...sw("discreet", L("Modo discreto", "Discreet mode")), after: () => syncDOM() }] },
+        { title: L("Automático", "Automatic"), items: [{ ...sw("discreetAuto", L("Ligar ao transmitir a tela", "Turn on while sharing my screen"), L("Liga sozinho enquanto você transmite a tela numa call e desliga quando você para.", "Turns on while you're sharing your screen in a call and off when you stop.")), after: () => { safe(() => checkMyStream()); syncDOM(); } }] },
+      ], custom: () => h(ShortcutRow) },
     { id: "focus", title: L("Modo foco", "Focus mode"), icon: "moon", color: "#5856d6", summary: () => (getSettings().focusMode ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [{ footer: L("Silencia os avisos do Lurk nessas situações. Tudo continua sendo registrado.", "Silences Lurk notifications in these situations. Everything is still logged."),
         items: [sw("focusMode", L("Modo foco", "Focus mode")), sw("focusOnDnd", L("Quando eu estiver em Não perturbar", "When I'm on Do Not Disturb")), sw("focusWhilePlaying", L("Quando eu estiver jogando", "When I'm playing a game"))] }] },
@@ -4085,7 +4237,7 @@ function settingsPages() {
       sections: [{ items: [sw("backupEnabled", L("Backup automático", "Automatic backup")), num("backupDays", L("A cada", "Every"), 1, 60, 1, L("dias", "days")), num("backupKeep", L("Guardar", "Keep"), 1, 10, 1, L("cópias", "copies"))] }], custom: () => h(BackupSection) },
   ];
 }
-const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus"], ["privado", "mentions", "contatos", "friends", "vip", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
+const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "contatos", "friends", "vip", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
 
 function SettingsScreen() {
   useBus(settingsBus, vipBus, backupBus, historyBus);
@@ -4340,6 +4492,7 @@ function userIdFromFiber(el) {
   return null;
 }
 function placeLastSeen() {
+  if (discreetActive()) return;
   const s = getSettings();
   const keep = new Set();
   if (s.vipLastSeen && Object.keys(getVipList()).length) {
@@ -4380,6 +4533,13 @@ function placeLastSeen() {
   for (const host of document.querySelectorAll(".dmtt-ls-host")) if (!host.querySelector(".dmtt-ls")) host.classList.remove("dmtt-ls-host");
 }
 function syncDOM() {
+  if (discreetActive()) {
+    toolbarBtn?.remove(); snipeBtn?.remove(); friendsBtn?.remove();
+    safe(() => unmountGuildBar());
+    document.querySelectorAll(".dmtt-ls, .dmtt-ls-line").forEach((n) => n.remove());
+    document.querySelectorAll(".dmtt-ls-host").forEach((n) => n.classList.remove("dmtt-ls-host"));
+    return;
+  }
   try { placeToolbarButton(); } catch (e) { Logger.error("toolbar", e); }
   try { placeLastSeen(); } catch (e) { Logger.error("lastseen", e); }
   try { placeGuildBar(); } catch (e) { Logger.error("guildbar", e); }
@@ -4679,6 +4839,18 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-hover-item.is-muted { color: #98989f; }
 .dmtt-fr-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .dmtt-nitro-img { width: 16px; height: 16px; }
+.dmtt-kbd { min-width: 96px; height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--c-sep, rgba(255,255,255,.12)); background: var(--c-fill2, rgba(120,120,128,.2)); color: var(--c-strong); font: inherit; font-size: 12.5px; font-weight: 600; font-family: ui-monospace, "SF Mono", Consolas, monospace; cursor: pointer; }
+.dmtt-kbd.is-rec { border-color: #0a84ff; color: #0a84ff; }
+.dmtt-freq { align-self: stretch; margin-top: 12px; padding: 10px 12px 8px; border-radius: 12px; background: var(--c-fill); text-align: left; }
+.dmtt-freq-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.dmtt-freq-title { font-size: 13px; font-weight: 600; color: var(--c-strong); }
+.dmtt-freq-sub { font-size: 11px; color: var(--c-muted); }
+.dmtt-freq-grid { display: grid; grid-template-columns: 26px repeat(24, 1fr); gap: 2px; align-items: center; }
+.dmtt-freq-day { font-size: 10px; color: var(--c-muted); line-height: 1; }
+.dmtt-freq-cell { aspect-ratio: 1; border-radius: 2px; background: var(--c-fill2, rgba(120,120,128,.18)); }
+.dmtt-freq-hour { font-size: 9px; color: var(--c-muted); margin-top: 2px; white-space: nowrap; }
+.dmtt-freq-empty { font-size: 12px; color: var(--c-muted); line-height: 1.4; }
+.dmtt-tag.is-purple { background: rgba(191, 90, 242, .16); color: #bf5af2; }
 .dmtt-tag.is-orange { background: rgba(255, 159, 10, .16); color: #ff9f0a; }
 .dmtt-tag.is-nitro { background: rgba(255, 115, 250, .16); color: #ff73fa; }
 .dmtt-guild-ic { width: 28px; height: 28px; border-radius: 8px; flex: none; object-fit: cover; }
@@ -4705,7 +4877,7 @@ const SUBS = {
   MESSAGE_DELETE: onMessageDelete,
   MESSAGE_DELETE_BULK: onMessageDeleteBulk,
   RELATIONSHIP_ADD: (a) => { onRelationshipAdd(a); onFriendAdded(a); },
-  RELATIONSHIP_REMOVE: (a) => { onRelationshipRemove(a); onFriendRemoved(a); },
+  RELATIONSHIP_REMOVE: (a) => { onFriendRemoved(a); onRelationshipRemove(a); },
   MESSAGE_REACTION_ADD: onReactionAdd,
   MESSAGE_REACTION_REMOVE: onReactionRemove,
   VOICE_STATE_UPDATES: onVoiceStates,
@@ -4759,6 +4931,14 @@ module.exports = class Lurk {
     saveDiag();
     this.identityTimer = setTimeout(() => safe(() => checkIdentities(true)), 10000);
     this.watchInterval = setInterval(() => safe(() => checkWatchedProfile()), 15 * 60000);
+    freqCache = null;
+    safe(() => { pruneFreq(); seedFreq(); });
+    this.onKey = (e) => safe(() => onDiscreetKey(e));
+    document.addEventListener("keydown", this.onKey, true);
+    safe(() => checkMyStream());
+    this.streamInterval = setInterval(() => safe(() => checkMyStream()), 3000);
+    this.freqInterval = setInterval(() => safe(() => { sampleFreq(); }), 60000);
+    this.freqFlush = setInterval(() => safe(() => { pruneFreq(); flushFreq(); }), 5 * 60000);
     this.watchTimer = setTimeout(() => safe(() => checkWatchedProfile()), 20000);
     scheduleSubscribe();
     this.subInterval = setInterval(subscribeVipGuilds, 120000);
@@ -4827,6 +5007,8 @@ module.exports = class Lurk {
     clearTimeout(this.friendsTimer);
     try { UserStore?.removeChangeListener?.(onUserStoreChange); } catch {}
     clearTimeout(this.identityTimer); clearTimeout(this.watchTimer); clearInterval(this.watchInterval);
+    clearInterval(this.freqInterval); clearInterval(this.freqFlush); safe(() => flushFreq());
+    document.removeEventListener("keydown", this.onKey, true); clearInterval(this.streamInterval); recordingShortcut = null;
     clearTimeout(identityTimer); identityTimer = null;
     snipeActive = false;
     if (window.__dmttSnipeHook === snipeInterceptor) window.__dmttSnipeHook = null;
