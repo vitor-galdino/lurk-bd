@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.9.0
+ * @version 2.9.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,8 +12,38 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.9.0";
+const VERSION = "2.9.1";
 const REPO = "vitor-galdino/lurk-bd";
+const RELEASE_CHANNEL = (() => {
+  try {
+    const ch = window.GLOBAL_ENV?.RELEASE_CHANNEL || (() => { try { return window.DiscordNative?.app?.getReleaseChannel?.(); } catch { return null; } })() || "stable";
+    return String(ch).toLowerCase();
+  } catch { return "stable"; }
+})();
+const SUFFIX = RELEASE_CHANNEL === "stable" ? "" : `_${RELEASE_CHANNEL}`;
+const DATA_FILES = ["Lurk", "LurkVIP", "LurkVIPStatus", "LurkVIPMessages", "LurkVIPCalls", "LurkMentions", "LurkSound", "LurkBackup", "LurkCalls"];
+function seedChannelData() {
+  if (!SUFFIX) return;
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const dir = BdApi.Plugins.folder;
+    if (fs.existsSync(path.join(dir, `Lurk${SUFFIX}.config.json`))) return;
+    for (const f of DATA_FILES) {
+      try {
+        const from = path.join(dir, `${f}.config.json`);
+        const to = path.join(dir, `${f}${SUFFIX}.config.json`);
+        if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to);
+      } catch {}
+    }
+    try {
+      const from = path.join(dir, "LurkArchives");
+      const to = path.join(dir, `LurkArchives${SUFFIX}`);
+      if (fs.existsSync(from) && !fs.existsSync(to)) fs.cpSync(from, to, { recursive: true });
+    } catch {}
+  } catch {}
+}
+seedChannelData();
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
   "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgzsb/BybDBFlRtuf+h7CzzL2fCwv6UB/ZWrwCW6QOEYCrfs0i98nGKu5RfmqflmrCQxzxPFLtSfgsgDnFxCV7g==",
@@ -21,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.9.1", items: [
+    ["fixed", "Discord PTB e Canary agora guardam os dados do Lurk separados do Discord principal. A Lista VIP e o resto não somem mais quando os dois estão abertos ao mesmo tempo. Na primeira vez, eles começam com uma cópia dos dados do principal.", "Discord PTB and Canary now keep Lurk's data separate from the main Discord. Your VIP list and everything else no longer get lost when both are open at the same time. On first run they start with a copy of the main client's data."],
+  ] },
   { version: "2.9.0", items: [
     ["new", "Pedidos de amizade: o Lurk lembra quem você já recusou e mostra \"Você recusou em…\" quando a pessoa pede de novo. No Filtro anti-spam dá para mandar essas pessoas direto para o Spam.", "Friend requests: Lurk remembers who you declined and shows \"You declined on…\" when they ask again. The Spam filter can send them straight to Spam."],
     ["new", "Lista VIP: botão Rotina no perfil de cada VIP, com o mapa de Frequência das últimas 4 semanas, horário e dia mais ativo, média online por dia, quando costuma entrar e sair, comparação com a semana passada, melhor horário pra falar, quando mais conversa e se usa PC ou celular.", "VIP list: a Routine button on each VIP's page with a Frequency map of the last 4 weeks, most active hours and day, daily online average, when they usually come online and leave, a comparison with last week, the best time to talk, when they talk the most and whether they use desktop or mobile."],
@@ -83,8 +116,17 @@ const CHANGELOG = [
     ["new", "Depois de cada atualização você escolhe se quer ver as novidades. Ajuste em Ajustes › Atualizações.", "After each update you choose whether to see what's new. Change it in Settings › Updates."],
   ] },
 ];
-const { Webpack, Patcher, React, Components, Data, UI, DOM, ContextMenu, Logger } = new BdApi(PLUGIN);
-const RawData = BdApi.Data;
+const { Webpack, Patcher, React, Components, UI, DOM, ContextMenu, Logger } = new BdApi(PLUGIN);
+const RawData = {
+  load: (file, key) => BdApi.Data.load(file + SUFFIX, key),
+  save: (file, key, value) => BdApi.Data.save(file + SUFFIX, key, value),
+  delete: (file, key) => BdApi.Data.delete(file + SUFFIX, key),
+};
+const Data = {
+  load: (key) => RawData.load(PLUGIN, key),
+  save: (key, value) => RawData.save(PLUGIN, key, value),
+  delete: (key) => RawData.delete(PLUGIN, key),
+};
 const h = React.createElement;
 
 const safe = (fn) => { try { return fn() ?? null; } catch { return null; } };
@@ -571,7 +613,7 @@ function deleteVipData(userId) {
   saveVipSoon();
 }
 
-const ARCHIVE_DIR = "LurkArchives";
+const ARCHIVE_DIR = `LurkArchives${SUFFIX}`;
 const archiveBus = createBus();
 const getArchives = () => (Data.load(k("archives")) || []).filter((a) => a?.file);
 function saveArchives(list) { Data.save(k("archives"), list); archiveBus.emit(); }
