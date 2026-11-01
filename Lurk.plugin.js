@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.7.3
+ * @version 2.8.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.7.3";
+const VERSION = "2.8.0";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,10 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.8.0", items: [
+    ["new", "Itens novos destacados em todas as listas do Lurk, e um contador vermelho em cada categoria e aba com o que ainda não foi visto.", "New items are highlighted in every Lurk list, with a red counter on each category and tab showing what you haven't seen yet."],
+    ["new", "Lista VIP: nova opção \"Mandar mensagem num servidor\" em \"Avisar quando\". Avisa e conta no ícone do Histórico VIP quando aquele VIP manda mensagem num servidor.", "VIP list: new \"They send a message in a server\" option under \"Notify me when\". Notifies you and counts on the VIP history icon when that VIP sends a message in a server."],
+  ] },
   { version: "2.7.3", items: [
     ["improved", "O Spam agora fica no topo da lista de pedidos, logo abaixo do Filtro anti-spam.", "Spam now sits at the top of the request list, right below the Spam filter."],
     ["improved", "Nomes mais curtos nos filtros dos pedidos, para caberem inteiros.", "Shorter request filter names so they fit."],
@@ -418,9 +422,55 @@ function toggleIgnore(type, id, label) {
 }
 
 const getSeenAt = () => Data.load(k("seenAt")) || 0;
-const markSeen = () => { Data.save(k("seenAt"), Date.now()); updateBadge(); };
+const seenBus = createBus();
+const SEEN_LEGACY = { "vipHist:messages": "deletedSeen", "vipHist:profile": "profileSeen" };
+let seenMapCache = null;
+const getSeenMap = () => (seenMapCache ??= Data.load(k("seenMap")) || {});
+function seenBaseline() {
+  let b = Data.load(k("seenBaseline"));
+  if (!b) { b = Date.now(); Data.save(k("seenBaseline"), b); }
+  return b;
+}
+function seenOf(key) {
+  const m = getSeenMap();
+  if (m[key] != null) return m[key];
+  const leg = SEEN_LEGACY[key] && Data.load(k(SEEN_LEGACY[key]));
+  return leg || seenBaseline();
+}
+function markSeenKeys(keys) {
+  if (!keys?.length) return;
+  const m = getSeenMap();
+  const now = Date.now();
+  for (const key of keys) m[key] = now;
+  Data.save(k("seenMap"), m);
+  seenBus.emit();
+  safe(() => updateBadge());
+  safe(() => updateSnipeBadge());
+}
+let seenSnapMap = null;
+function seenSnap(key) {
+  if (!seenSnapMap) return seenOf(key);
+  if (!(key in seenSnapMap)) seenSnapMap[key] = seenOf(key);
+  return seenSnapMap[key];
+}
+const resetSeenSnap = () => { seenSnapMap = {}; };
+function useTabSeen(tabs, active) {
+  const [opened, setOpened] = React.useState(() => new Set());
+  React.useEffect(() => {
+    const t = tabs[active];
+    if (t) markSeenKeys(t.keys);
+    setOpened((o) => (o.has(active) ? o : new Set([...o, active])));
+  }, [active]);
+  return (tab) => (opened.has(tab) || !tabs[tab]?.count ? 0 : tabs[tab].count());
+}
+function Flash({ isNew, children }) {
+  const on = useFlash(isNew);
+  if (!isNew) return children;
+  return h("div", { className: `dmtt-flashwrap ${on ? "is-flash" : ""}` }, h("span", { className: "dmtt-flashdot", title: L("Novo", "New") }), children);
+}
+const MENTION_TYPES = ["ghost", "reply", "keyword", "reaction"];
 
-const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true };
+const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false };
 const getVipList = () => Data.load(k("vip")) || {};
 const isVip = (id) => !!getVipList()[id];
 const vipFlag = (id, field) => { const e = getVipList()[id]; return !!e && (e[field] ?? VIP_DEFAULT[field]); };
@@ -1034,6 +1084,17 @@ function onMessageCreate(action) {
     if (isVip(userId)) {
       const s = getSettings();
       if (s.vipRecordMessages && (gid || s.vipRecordDMs)) recordVipMessage(msg, channelId, gid, ch);
+      if (gid && vipFlag(userId, "notifyMessage")) {
+        const where = `#${ch?.name || L("canal", "channel")} · ${safe(() => GuildStore?.getGuild?.(gid)?.name) || L("servidor", "server")}`;
+        const text = String(msg.content || "").slice(0, 120) || (msg.attachments?.length ? L("[anexo]", "[attachment]") : "");
+        notify({
+          title: L("Lista VIP", "VIP list"),
+          text: L(`${nameOf(userId, getVipList()[userId] || {})} mandou mensagem em ${where}`, `${nameOf(userId, getVipList()[userId] || {})} sent a message in ${where}`) + (text ? `: ${text}` : ""),
+          icon: avatarOf(UserStore?.getUser?.(userId), userId), onClick: () => jumpTo(gid, channelId, msg.id),
+          toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound,
+        });
+        safe(() => updateSnipeBadge());
+      }
       checkInvisible(userId, "message", gid && ch?.name ? `#${ch.name}` : null);
     }
     handleMentionCreate(msg, channelId, gid, ch);
@@ -1059,6 +1120,7 @@ function recordVipMessage(msg, channelId, guildId, ch) {
     createdAt: Date.parse(msg.timestamp) || Date.now(),
     edits: [],
     deletedAt: null,
+    watched: !!(guildId && vipFlag(msg.author.id, "notifyMessage")),
   }, ...d.messages];
   if (d.messages.length > max) enforceMessageLimit();
   saveVipSoon("messages");
@@ -2014,9 +2076,10 @@ function addProfileEvents(evs) {
   profileBus.emit();
   safe(() => updateSnipeBadge());
 }
-const getProfileSeen = () => Data.load(k("profileSeen")) || 0;
-const markProfileSeen = () => { Data.save(k("profileSeen"), Date.now()); safe(() => updateSnipeBadge()); };
-const newProfileCount = () => { const seen = getProfileSeen(); return getProfileLog().filter((e) => e.at > seen && isVip(e.userId)).length; };
+const getProfileSeen = () => seenOf("vipHist:profile");
+const markProfileSeen = () => markSeenKeys(["vipHist:profile"]);
+const unseenProfile = (seen, userId) => getProfileLog().filter((e) => e.at > seen && isVip(e.userId) && (!userId || e.userId === userId)).length;
+const newProfileCount = () => unseenProfile(seenOf("vipHist:profile"));
 const getIdentitySnap = () => Data.load(k("vipIdentity")) || {};
 function identityOf(id) {
   const u = UserStore?.getUser?.(id);
@@ -2206,11 +2269,29 @@ function callTotals() {
 }
 
 const snipeBus = vipBus;
-const getDeletedSeen = () => Data.load(k("deletedSeen")) || 0;
-function markDeletedSeen() { Data.save(k("deletedSeen"), Date.now()); updateSnipeBadge(); }
+const getDeletedSeen = () => seenOf("vipHist:messages");
+function markDeletedSeen() { markSeenKeys(["vipHist:messages"]); }
+const activityAt = (m) => Math.max(lastChangeAtSafe(m), m.createdAt || 0);
+function lastChangeAtSafe(m) { return Math.max(m.deletedAt || 0, m.edits?.length ? m.edits[m.edits.length - 1].at : 0); }
+function vipFeedItems() {
+  const seen = new Set();
+  const out = [];
+  for (const m of loadVip().messages) {
+    if (!isVip(m.userId) || seen.has(m.id)) continue;
+    if (m.deletedAt || m.edits?.length || m.watched) { seen.add(m.id); out.push(m); }
+  }
+  return out.sort((a, b) => activityAt(b) - activityAt(a));
+}
+const unseenTyping = (seen) => new Set(getHistory().filter((r) => r.lastTypingAt > seen).map((r) => r.userId)).size;
+const unseenMention = (type, seen) => (mentionData.owner ? mentionData.events : loadMentions().events).filter((e) => e.type === type && e.at > seen).length;
+const unseenMentionsAll = (get) => MENTION_TYPES.reduce((n, t) => n + unseenMention(t, get(`mention:${t}`)), 0);
+const unseenFirst = (seen) => getFirstContacts().filter((e) => e.at > seen).length;
+const unseenReqs = (seen) => getCanceledReqs().filter((r) => (r.canceledAt || 0) > seen).length;
+const unseenVipMsgs = (seen) => vipFeedItems().filter((m) => activityAt(m) > seen).length;
+const unseenStatus = (seen) => loadVip().events.filter((e) => (e.type === "presence" || e.type === "invisible") && isVip(e.userId) && e.at > seen).length;
 const lastChangeAt = (m) => Math.max(m.deletedAt || 0, m.edits?.length ? m.edits[m.edits.length - 1].at : 0);
 const vipChanges = () => loadVip().messages.filter((m) => isVip(m.userId) && (m.deletedAt || m.edits?.length)).sort((a, b) => lastChangeAt(b) - lastChangeAt(a));
-const newChangesCount = () => { const seen = getDeletedSeen(); return vipChanges().filter((m) => lastChangeAt(m) > seen).length; };
+const newChangesCount = () => unseenVipMsgs(seenOf("vipHist:messages"));
 const snipeCountFor = (channelId) => (channelId ? vipChanges().filter((m) => m.channelId === channelId).length : 0);
 
 let snipeActive = false;
@@ -2682,7 +2763,6 @@ function ScreenRouter({ s }) {
 
 let lastSeenBeforeOpen = 0;
 function counts() {
-  const seen = lastSeenBeforeOpen;
   const today = startOfDay(Date.now());
   const hist = getHistory();
   const ments = loadMentions().events;
@@ -2690,22 +2770,22 @@ function counts() {
   return {
     quitToday: new Set(hist.filter((r) => r.lastTypingAt >= today).map((r) => r.userId)).size,
     typingPeople: new Set(hist.map((r) => r.userId)).size,
-    typingNew: new Set(hist.filter((r) => r.lastTypingAt > seen).map((r) => r.userId)).size,
+    typingNew: unseenTyping(seenOf("typing")),
     ghostsToday: ments.filter((e) => e.at >= today && (e.type === "ghost" || e.type === "reply")).length,
     mentions: ments.length,
-    mentionsNew: ments.filter((e) => e.at > seen).length,
+    mentionsNew: unseenMentionsAll(seenOf),
     vips: vips.length,
     vipOnline: vips.filter((id) => { const st = rawPresence(id)?.status; return st && st !== "offline"; }).length,
     vipInCall: vips.filter((id) => vipVoice.has(id)).length,
     vipDeletedToday: loadVip().messages.filter((m) => m.deletedAt && m.deletedAt >= today).length,
     contacts: getFirstContacts().length + getCanceledReqs().length,
-    contactsNew: getFirstContacts().filter((e) => e.at > seen).length + getCanceledReqs().filter((r) => (r.canceledAt || 0) > seen).length,
+    contactsNew: unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests")),
     changes: vipChanges().length,
-    changesNew: newChangesCount(),
+    changesNew: newChangesCount() + newProfileCount(),
   };
 }
 function HomeScreen() {
-  useBus(historyBus, vipBus, mentionBus, reqBus, callBus, snipeBus);
+  useBus(historyBus, vipBus, mentionBus, reqBus, callBus, snipeBus, seenBus, profileBus);
   useTicker(60000);
   const nav = useNav();
   const c = counts();
@@ -2792,6 +2872,8 @@ function SessionRow({ r, showWhere }) {
 function TypingScreen({ channelId }) {
   useBus(historyBus, vipBus);
   const nav = useNav();
+  useTabSeen({ main: { keys: channelId ? [] : ["typing"] } }, "main");
+  const typingSnap = seenSnap("typing");
   const [q, setQ] = React.useState("");
   const [seg, setSeg] = React.useState("all");
   const [limit, setLimit] = React.useState(40);
@@ -2817,7 +2899,7 @@ function TypingScreen({ channelId }) {
     h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome, @ ou servidor", "Search by name, @ or server") }),
     h(Segmented, { value: seg, onChange: (v) => { setSeg(v); setLimit(40); }, options: segs.map(([v, l]) => [v, l, v === "all" ? null : countPeople(tests[v])]) }),
     people.length
-      ? h(Group, null, people.slice(0, limit).map((g) => h(PersonRow, { key: g[0].userId, rows: g, onOpen: () => nav.push({ type: "person", userId: g[0].userId, channelId }) })))
+      ? h(Group, null, people.slice(0, limit).map((g) => h(Flash, { key: g[0].userId, isNew: g[0].lastTypingAt > typingSnap }, h(PersonRow, { rows: g, onOpen: () => nav.push({ type: "person", userId: g[0].userId, channelId }) }))))
       : h(Empty, { icon: "keyboard", title: base.length ? L("Nada com esse filtro", "Nothing matches this filter") : L("Ninguém desistiu ainda", "No one has quit yet") }, base.length ? null : L("Quando alguém digitar pra você e não enviar, aparece aqui.", "When someone types to you and doesn't send, it shows up here.")),
     people.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 40) }, L("Mostrar mais", "Show more")) : null,
     base.length ? h(Group, null,
@@ -2849,7 +2931,7 @@ function PersonScreen({ userId, channelId }) {
       vip ? h(ActionButton, { icon: h(SIcon, { d: SI.sparkle, size: 18 }), label: L("Ver VIP", "View VIP"), onClick: () => nav.push({ type: "vipPerson", userId }) }) : null,
       h(ActionButton, { icon: h(SIcon, { d: SI.ban, size: 18 }), label: ignored ? L("Ignorado", "Ignored") : L("Ignorar", "Ignore"), tone: ignored ? "muted" : null, onClick: () => toggleIgnore("users", userId, usernameOf(userId, latest) || displayName(latest)) })),
     h(Stats, { items: [[rows.length, L(plural(rows.length, "vez", "vezes"), plural(rows.length, "time", "times"))], [tries, L(plural(tries, "tentativa", "tentativas"), plural(tries, "attempt", "attempts"))], [lo < 1000 ? `≤${fmtSecs(hi)}` : `~${fmtSecs(lo)}`, L("digitando", "typing")]] }),
-    h(DayList, { items: rows, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: !channelId }) }),
+    h(DayList, { items: rows, getTime: (r) => r.lastTypingAt, render: (r) => h(Flash, { key: r.id, isNew: r.lastTypingAt > seenSnap("typing") }, h(SessionRow, { r, showWhere: !channelId })) }),
     h(Group, null, h(NavRow, { title: L("Apagar histórico desta pessoa", "Delete this person's history"), danger: true, onClick: () => confirmDanger(L("Apagar histórico", "Delete history"), L(`Apagar o histórico de ${displayName(latest)}?`, `Delete ${displayName(latest)}'s history?`), () => { deleteRecords((x) => x.userId === userId && (!channelId || x.channelId === channelId)); nav.pop(); }) })));
 }
 
@@ -2881,6 +2963,11 @@ function MentionsScreen({ initial = "all" }) {
   useBus(mentionBus, settingsBus);
   const nav = useNav();
   const [seg, setSeg] = React.useState(initial);
+  const mKey = (t) => `mention:${t}`;
+  const tabCount = useTabSeen({
+    all: { keys: MENTION_TYPES.map(mKey) },
+    ...Object.fromEntries(MENTION_TYPES.map((t) => [t, { keys: [mKey(t)], count: () => unseenMention(t, seenSnap(mKey(t))) }])),
+  }, seg);
   const [q, setQ] = React.useState("");
   const [limit, setLimit] = React.useState(40);
   const all = loadMentions().events;
@@ -2894,8 +2981,8 @@ function MentionsScreen({ initial = "all" }) {
       : e.type === "keyword" ? h("span", null, L("falou ", "said "), h("b", { className: "dmtt-kw" }, e.keyword))
       : h("span", { className: "dmtt-inline" }, L("reagiu ", "reacted "), h(EmojiView, { e: e.emoji }), L(" e tirou", " and removed it"));
     const body = e.type === "reaction" ? (e.myContent ? L(`Sua mensagem: ${e.myContent}`, `Your message: ${e.myContent}`) : null) : (e.content || (e.attachments?.length ? `[${e.attachments.join(", ")}]` : null));
-    return h(MessageCard, {
-      key: e.id, avatar: h(Avatar, { userId: e.userId, url: e.avatarURL, size: 32 }), name: nameOf(e.userId, e), action,
+    return h(Flash, { key: e.id, isNew: e.at > seenSnap(mKey(e.type)) }, h(MessageCard, {
+      avatar: h(Avatar, { userId: e.userId, url: e.avatarURL, size: 32 }), name: nameOf(e.userId, e), action,
       meta: joinNodes([placeLabel(e), lived ? (e.type === "reaction" ? L(`tirou após ${lived}`, `removed after ${lived}`) : L(`${lived} no ar`, `up for ${lived}`)) : null]),
       time: fmtHM(e.createdAt || e.at), body, bodyTone: e.type === "ghost" || e.type === "reply" ? "deleted" : null,
       extra: h(React.Fragment, null,
@@ -2903,13 +2990,13 @@ function MentionsScreen({ initial = "all" }) {
         e.edited && e.newContent != null ? h("div", { className: "dmtt-quote" }, h("b", null, L("Depois da edição: ", "After editing: ")), e.newContent || NO_TEXT()) : null),
       onJump: e.type === "keyword" || e.type === "reaction" ? () => jumpTo(e.guildId, e.channelId, e.messageId) : null,
       onDelete: () => deleteMentionEvents((x) => x.id === e.id),
-    });
+    }));
   };
   const noKw = seg === "keyword" && !keywordList().length;
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.mentions(), subtitle: L("Ghost pings, respostas apagadas, palavras-chave e reações removidas", "Ghost pings, deleted replies, keywords and removed reactions") }),
     all.length > 8 ? h(Search, { value: q, onChange: setQ }) : null,
-    h(Segmented, { value: seg, onChange: (v) => { setSeg(v); setLimit(40); }, options: [["all", L("Todas", "All")], ["ghost", "Ghost", count("ghost")], ["reply", L("Respostas", "Replies"), count("reply")], ["keyword", L("Palavras", "Keywords"), count("keyword")], ["reaction", L("Reações", "Reactions"), count("reaction")]] }),
+    h(Segmented, { value: seg, onChange: (v) => { setSeg(v); setLimit(40); }, options: [["all", L("Todas", "All")], ["ghost", "Ghost", tabCount("ghost") || count("ghost"), !!tabCount("ghost")], ["reply", L("Respostas", "Replies"), tabCount("reply") || count("reply"), !!tabCount("reply")], ["keyword", L("Palavras", "Keywords"), tabCount("keyword") || count("keyword"), !!tabCount("keyword")], ["reaction", L("Reações", "Reactions"), tabCount("reaction") || count("reaction"), !!tabCount("reaction")]] }),
     noKw ? h(Group, { footer: L("Ignora maiúsculas e acentos e só casa a palavra inteira.", "Case- and accent-insensitive, whole words only.") }, h(NavRow, { icon: "at", color: "#ff9f0a", title: L("Configurar palavras-chave", "Set up keywords"), onClick: () => nav.push({ type: "settingsPage", id: "mentions" }) })) : null,
     list.length ? h(DayList, { items: list.slice(0, limit), getTime: (e) => e.at, render }) : (!noKw ? h(Empty, { icon: "at", title: all.length ? L("Nada com esse filtro", "Nothing matches this filter") : L("Tudo limpo", "All clear") }, all.length ? null : L("Ninguém te marcou e apagou ainda.", "No one has pinged you and deleted it yet.")) : null),
     list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 40) }, L("Mostrar mais", "Show more")) : null,
@@ -2919,6 +3006,10 @@ function MentionsScreen({ initial = "all" }) {
 function ContactsScreen({ initial = "first" }) {
   useBus(reqBus);
   const [seg, setSeg] = React.useState(initial);
+  const tabCount = useTabSeen({
+    first: { keys: ["contacts:first"], count: () => unseenFirst(seenSnap("contacts:first")) },
+    requests: { keys: ["contacts:requests"], count: () => unseenReqs(seenSnap("contacts:requests")) },
+  }, seg);
   const first = getFirstContacts();
   const reqs = getCanceledReqs();
   const pendingCount = Object.keys(getPendingReqs()).length;
@@ -2926,9 +3017,9 @@ function ContactsScreen({ initial = "first" }) {
   const sameReq = (a, b) => a.userId === b.userId && a.canceledAt === b.canceledAt && a.at === b.at;
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.contacts(), subtitle: L("Quem nunca falou com você e digitou sem enviar, e quem cancelou o pedido de amizade", "People who never talked to you and typed without sending, and canceled friend requests") }),
-    h(Segmented, { value: seg, onChange: setSeg, options: [["first", L("Digitou pela 1ª vez", "First-time typers"), first.length], ["requests", L("Pedidos cancelados", "Canceled requests"), reqs.length]] }),
+    h(Segmented, { value: seg, onChange: setSeg, options: [["first", L("Digitou pela 1ª vez", "First-time typers"), tabCount("first") || first.length, !!tabCount("first")], ["requests", L("Pedidos cancelados", "Canceled requests"), tabCount("requests") || reqs.length, !!tabCount("requests")]] }),
     seg === "first"
-      ? (first.length ? h(DayList, { items: first, getTime: (e) => e.at, render: (e) => h("div", { key: `${e.userId}-${e.at}`, className: "dmtt-row" },
+      ? (first.length ? h(DayList, { items: first, getTime: (e) => e.at, render: (e) => h(Flash, { key: `${e.userId}-${e.at}`, isNew: e.at > seenSnap("contacts:first") }, h("div", { className: "dmtt-row" },
           h(Avatar, { userId: e.userId, url: e.avatarURL }),
           h("span", { className: "dmtt-row-main" },
             h("span", { className: "dmtt-row-title" }, nameOf(e.userId, e), e.username ? h("span", { className: "dmtt-row-user" }, ` @${e.username}`) : null),
@@ -2938,9 +3029,9 @@ function ContactsScreen({ initial = "first" }) {
               e.isRequest ? L("solicitação de mensagem", "message request") : null]))),
           h("span", { className: "dmtt-row-time" }, fmtHM(e.at)),
           h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveFirstContacts(getFirstContacts().filter((x) => !(x.userId === e.userId && x.at === e.at))) }, h(Icon, { d: ICON_X, size: 12 })),
-          h("button", { className: "dmtt-link", onClick: () => openDM(e.channelId, e.userId, false) }, L("Abrir", "Open"))) })
+          h("button", { className: "dmtt-link", onClick: () => openDM(e.channelId, e.userId, false) }, L("Abrir", "Open")))) })
         : h(Empty, { icon: "userPlus", title: L("Ninguém novo por aqui", "No one new yet") }, L("Quando alguém que nunca falou com você digitar e parar sem enviar, aparece aqui.", "When someone who never talked to you types and stops without sending, it shows up here.")))
-      : (reqs.length ? h(DayList, { items: reqs, getTime: (r) => r.canceledAt || r.at || 0, render: (r, i) => h("div", { key: `${r.userId}-${r.canceledAt}-${i}`, className: "dmtt-row" },
+      : (reqs.length ? h(DayList, { items: reqs, getTime: (r) => r.canceledAt || r.at || 0, render: (r, i) => h(Flash, { key: `${r.userId}-${r.canceledAt}-${i}`, isNew: (r.canceledAt || 0) > seenSnap("contacts:requests") }, h("div", { className: "dmtt-row" },
           h(Avatar, { userId: r.userId, url: r.avatarURL }),
           h("span", { className: "dmtt-row-main" },
             h("span", { className: "dmtt-row-title" }, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-row-user" }, ` @${r.username}`) : null),
@@ -2948,7 +3039,7 @@ function ContactsScreen({ initial = "first" }) {
               ? L(`Pediu às ${fmtHM(r.at)} · cancelou após ${fmtDur(r.canceledAt - r.at)}`, `Sent at ${fmtHM(r.at)} · canceled after ${fmtDur(r.canceledAt - r.at)}`)
               : L(`Pediu em ${fmtDate(r.at).slice(0, 16)} · sumiu com o plugin desligado`, `Sent on ${fmtDate(r.at).slice(0, 16)} · gone while the plugin was off`))),
           h("span", { className: "dmtt-row-time" }, r.canceledAt ? relTime(r.canceledAt) : ""),
-          h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))) }, h(Icon, { d: ICON_X, size: 12 }))) })
+          h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: () => saveCanceledReqs(getCanceledReqs().filter((x) => !sameReq(x, r))) }, h(Icon, { d: ICON_X, size: 12 })))) })
         : h(Empty, { icon: "userPlus", title: L("Nenhum pedido cancelado", "No canceled requests") }, pendingText)),
     (seg === "first" ? first.length : reqs.length) ? h(Group, { footer: seg === "requests" ? `${pendingText} ${L("Suas recusas não entram.", "Requests you declined aren't listed.")}` : null },
       h(NavRow, { title: L("Limpar lista", "Clear list"), danger: true, onClick: () => confirmDanger(L("Limpar lista", "Clear list"), L("Essa ação não pode ser desfeita.", "This can't be undone."), () => (seg === "first" ? saveFirstContacts([]) : saveCanceledReqs([]))) })) : null);
@@ -3188,14 +3279,13 @@ function ProfileChangeRow({ e, isNew, showName }) {
 }
 function ProfileFeed({ userId }) {
   useBus(profileBus, vipBus);
-  const [seen] = React.useState(getProfileSeen);
-  React.useEffect(() => { if (!userId) markProfileSeen(); }, []);
+  const seen = seenSnap(userId ? `vip:${userId}:profile` : "vipHist:profile");
   const list = getProfileLog().filter((e) => isVip(e.userId) && (!userId || e.userId === userId));
   const watch = getProfileWatch();
   const watchName = watch && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
   return h(React.Fragment, null,
     !userId ? h(Group, { footer: watchName ? L(`Nome, @ e foto são registrados para todos os VIPs. Contas conectadas, bio, pronomes e banner só de ${watchName}, conferido a cada 15 minutos.`, `Name, username and avatar are logged for every VIP. Connected accounts, bio, pronouns and banner only for ${watchName}, checked every 15 minutes.`) : L("Nome, @ e foto são registrados para todos os VIPs. Para ver também contas conectadas, bio, pronomes e banner, ligue \"Monitorar perfil\" no perfil de um VIP.", "Name, username and avatar are logged for every VIP. To also see connected accounts, bio, pronouns and banner, turn on \"Watch profile\" on a VIP's page.") }) : null,
-    list.length ? h(DayList, { items: list, getTime: (e) => e.at, render: (e, i) => h(ProfileChangeRow, { key: `${e.at}-${i}`, e, isNew: !userId && e.at > seen, showName: !userId }) })
+    list.length ? h(DayList, { items: list, getTime: (e) => e.at, render: (e, i) => h(Flash, { key: `${e.at}-${i}`, isNew: e.at > seen }, h(ProfileChangeRow, { e, isNew: false, showName: !userId })) })
       : h(Empty, { icon: "star", title: L("Nenhuma mudança de perfil ainda", "No profile changes yet") }));
 }
 function SnipeScreen({ channelId, tab: initialTab }) {
@@ -3208,11 +3298,20 @@ function SnipeScreen({ channelId, tab: initialTab }) {
       h(Empty, { icon: "clock", title: L("Sem VIPs ainda", "No VIPs yet") }, L("Aqui aparece o que as pessoas da sua Lista VIP apagam ou editam, quando ficam online, ausentes ou offline, e quanto tempo ficam ativas.", "This is where you'll see what people on your VIP list delete or edit, when they go online, idle or offline, and how long they stay active.")),
       h(Group, null, h(NavRow, { icon: "star", color: "#ffcc00", title: L("Abrir Lista VIP", "Open VIP list"), onClick: () => nav.push({ type: "vip" }) })));
   }
-  const nChanges = newChangesCount();
-  const nProfile = newProfileCount();
+  return h(SnipeTabs, { tab, setTab, channelId, vips });
+}
+function SnipeTabs({ tab, setTab, channelId, vips }) {
+  useBus(seenBus);
+  const tabCount = useTabSeen({
+    messages: { keys: ["vipHist:messages"], count: () => unseenVipMsgs(seenSnap("vipHist:messages")) },
+    status: { keys: ["vipHist:status"], count: () => unseenStatus(seenSnap("vipHist:status")) },
+    profile: { keys: ["vipHist:profile"], count: () => unseenProfile(seenSnap("vipHist:profile")) },
+    people: { keys: [] },
+  }, tab);
+  const opt = (v, label, total) => { const n = tabCount(v); return [v, label, n || total || null, !!n]; };
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.snipe(), subtitle: L("Tudo o que seus VIPs fizeram, no privado e nos servidores", "Everything your VIPs did, in DMs and servers") }),
-    h(Segmented, { value: tab, onChange: setTab, options: [["messages", L("Mensagens", "Messages"), nChanges || null], ["status", "Status"], ["profile", L("Perfil", "Profile"), nProfile || null], ["people", L("Pessoas", "People"), vips.length]] }),
+    h(Segmented, { value: tab, onChange: setTab, options: [opt("messages", L("Mensagens", "Messages")), opt("status", "Status"), opt("profile", L("Perfil", "Profile")), ["people", L("Pessoas", "People"), vips.length]] }),
     tab === "messages" ? h(MessagesFeed, { channelId }) : tab === "status" ? h(StatusFeed) : tab === "profile" ? h(ProfileFeed, null) : h(VipPeopleList));
 }
 
@@ -3268,13 +3367,13 @@ function StatusFeed() {
       const meta = e.type === "invisible"
         ? (e.via === "typing" ? L(`digitando ${e.where ? `em ${e.where}` : "pra você"}`, `typing ${e.where ? `in ${e.where}` : "to you"}`) : L(`mandou mensagem ${e.where ? `em ${e.where}` : "pra você"}`, `sent a message ${e.where ? `in ${e.where}` : "to you"}`))
         : joinNodes([durationOf(e), e.devices?.length && e.to !== "offline" ? h(Devices, { devices: e.devices }) : null]);
-      return h("button", { key: `${e.userId}-${e.at}-${i}`, className: "dmtt-row", onClick: () => nav.push({ type: "vipPerson", userId: e.userId }) },
+      return h(Flash, { key: `${e.userId}-${e.at}-${i}`, isNew: e.at > seenSnap("vipHist:status") }, h("button", { className: "dmtt-row", onClick: () => nav.push({ type: "vipPerson", userId: e.userId }) },
         h("span", { className: `dmtt-tl-dot ${e.type === "invisible" ? "dmtt-dot-invisible" : `dmtt-dot-${e.to}`}` }),
         h(Avatar, { userId: e.userId, size: 28 }),
         h("span", { className: "dmtt-row-main" },
           h("span", { className: "dmtt-row-title" }, h("span", { className: "dmtt-num dmtt-time-lead" }, fmtHM(e.at)), name, h("span", { className: "dmtt-card-action" }, ` ${text}`)),
           h("span", { className: "dmtt-row-sub" }, meta)),
-        h("span", { className: "dmtt-chev" }, h(Icon, { d: ICON_CHEVRON, size: 14 })));
+        h("span", { className: "dmtt-chev" }, h(Icon, { d: ICON_CHEVRON, size: 14 }))));
     } }) : h(Empty, { icon: "sparkle", title: L("Sem mudanças de status ainda", "No status changes yet") }, L("Aparecem aqui quando os VIPs ficarem online, ausentes ou offline. Pra quem não é seu amigo, o Discord só manda o status se vocês tiverem um servidor em comum.", "They show up here when VIPs go online, idle or offline. For non-friends, Discord only sends status if you share a server.")),
     events.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 60) }, L("Mostrar mais", "Show more")) : null);
 }
@@ -3390,9 +3489,8 @@ function MessagesFeed({ channelId }) {
   const archives = getArchives();
   const query = normalize(q.trim());
   const arch = useArchiveMessages(archives, !!query && inArchive);
-  const [seenBefore] = React.useState(getDeletedSeen);
-  React.useEffect(() => { markDeletedSeen(); }, []);
-  const all = vipChanges();
+  const seenBefore = seenSnap("vipHist:messages");
+  const all = vipFeedItems();
   const here = channelId ? all.filter((m) => m.channelId === channelId) : [];
   const [where, setWhere] = React.useState(here.length ? "here" : "all");
   const [kind, setKind] = React.useState("all");
@@ -3426,14 +3524,16 @@ function MessagesFeed({ channelId }) {
   let list = where === "here" ? here : all;
   const nDel = list.filter((m) => m.deletedAt).length;
   const nEd = list.filter((m) => m.edits?.length).length;
+  const nSent = list.filter((m) => m.watched).length;
   if (kind === "deleted") list = list.filter((m) => m.deletedAt);
   if (kind === "edited") list = list.filter((m) => m.edits?.length);
+  if (kind === "sent") list = list.filter((m) => m.watched);
   return h(React.Fragment, null,
     searchBar,
     h(Group, null, h(NavRow, { icon: "archive", color: "#8e8e93", title: L("Mensagens antigas", "Old messages"), detail: archives.length ? `${archives.length}` : L("Nenhuma", "None"), onClick: () => nav.push({ type: "archives" }) })),
     here.length ? h(Segmented, { value: where, onChange: setWhere, options: [["here", hereLabel, here.length], ["all", L("Todos os lugares", "Everywhere"), all.length]] }) : null,
-    h(Segmented, { value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd]] }),
-    list.length ? h(DayList, { items: list.slice(0, limit), getTime: lastChangeAt, render: (m) => h(ChangeCard, { key: m.id, m, isNew: lastChangeAt(m) > seenBefore, showPlace: where === "all" }) })
+    h(Segmented, { value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd], ...(nSent ? [["sent", L("Enviadas", "Sent"), nSent]] : [])] }),
+    list.length ? h(DayList, { items: list.slice(0, limit), getTime: activityAt, render: (m) => h(Flash, { key: m.id, isNew: activityAt(m) > seenBefore }, h(ChangeCard, { m, isNew: false, showPlace: where === "all" })) })
       : h(Empty, { icon: "clock", title: L("Nada por aqui", "Nothing here") }, L("Quando um VIP apagar ou editar uma mensagem, aparece aqui.", "When a VIP deletes or edits a message, it shows up here.")),
     list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 40) }, L("Mostrar mais", "Show more")) : null);
 }
@@ -3444,7 +3544,7 @@ function ChangeCard({ m, isNew, showPlace }) {
   const deleted = !!m.deletedAt;
   const current = edits.length ? edits[edits.length - 1].content : m.content;
   const body = (deleted ? current : current) || (m.attachments?.length ? `[${m.attachments.map((a) => a.name).join(", ")}]` : NO_TEXT());
-  const action = deleted ? (edits.length ? L("editou e depois apagou", "edited, then deleted") : L("apagou", "deleted")) : L(`editou ${edits.length > 1 ? `${edits.length}×` : ""}`, `edited${edits.length > 1 ? ` ${edits.length}×` : ""}`);
+  const action = deleted ? (edits.length ? L("editou e depois apagou", "edited, then deleted") : L("apagou", "deleted")) : !edits.length ? L("mandou mensagem", "sent a message") : L(`editou ${edits.length > 1 ? `${edits.length}×` : ""}`, `edited${edits.length > 1 ? ` ${edits.length}×` : ""}`);
   const place = m.guildId ? `#${m.channelName || L("canal", "channel")} · ${m.guildName || ""}` : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
   return h(MessageCard, {
     avatar: h("button", { className: "dmtt-avbtn", title: L("Ver perfil VIP", "Open VIP profile"), onClick: () => nav.push({ type: "vipPerson", userId: m.userId }) }, h(Avatar, { userId: m.userId, size: 32 })),
@@ -3536,7 +3636,8 @@ function ActivityList({ id, events }) {
   if (!mine.length) return h(Empty, { icon: "sparkle", title: L("Sem atividade ainda", "No activity yet") }, isFriendOf(id) ? L("As mudanças de status aparecem aqui assim que acontecerem.", "Status changes show up here as they happen.") : L("Essa pessoa não é sua amiga: o Discord só manda o status dela se vocês estiverem num servidor em comum.", "This person isn't your friend: Discord only sends their status if you share a server."));
   const presence = mine.filter((e) => e.type === "presence");
   const durationOf = (e) => { const i = presence.indexOf(e); if (i < 0) return null; const newer = i > 0 ? presence[i - 1] : null; return newer ? L(`por ${fmtDur(newer.at - e.at)}`, `for ${fmtDur(newer.at - e.at)}`) : L(`há ${fmtDur(Date.now() - e.at)}`, `${fmtDur(Date.now() - e.at)} ago`); };
-  return h(DayList, { items: mine, getTime: (e) => e.at, render: (e, i) => e.type === "invisible"
+  const snap = seenSnap(`vip:${id}:activity`);
+  return h(DayList, { items: mine, getTime: (e) => e.at, render: (e, i) => h(Flash, { key: `${e.at}-${i}`, isNew: e.at > snap }, e.type === "invisible"
     ? h("div", { key: `${e.at}-${i}`, className: "dmtt-row" },
         h("span", { className: "dmtt-tl-dot dmtt-dot-invisible" }),
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, h("span", { className: "dmtt-num dmtt-time-lead" }, fmtHM(e.at)), L("Visto invisível", "Seen while invisible")),
@@ -3544,7 +3645,7 @@ function ActivityList({ id, events }) {
     : h("div", { key: `${e.at}-${i}`, className: "dmtt-row" },
         h("span", { className: `dmtt-tl-dot dmtt-dot-${e.to}` }),
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, h("span", { className: "dmtt-num dmtt-time-lead" }, fmtHM(e.at)), PRESENCE_VERB[e.to] || e.to),
-          h("span", { className: "dmtt-row-sub" }, joinNodes([durationOf(e), e.devices?.length && e.to !== "offline" ? h(Devices, { devices: e.devices }) : null])))) });
+          h("span", { className: "dmtt-row-sub" }, joinNodes([durationOf(e), e.devices?.length && e.to !== "offline" ? h(Devices, { devices: e.devices }) : null]))))) });
 }
 function MessagesList({ id, messages }) {
   const [onlyChanged, setOnlyChanged] = React.useState(false);
@@ -3563,7 +3664,7 @@ function MessagesList({ id, messages }) {
       const edited = m.edits?.length > 0;
       const current = edited ? m.edits[m.edits.length - 1].content : m.content;
       const body = current || (m.attachments?.length ? "" : m.stickers?.length ? L(`[figurinha: ${m.stickers.join(", ")}]`, `[sticker: ${m.stickers.join(", ")}]`) : NO_TEXT());
-      return h(MessageEntry, { key: m.id, m, body, edited });
+      return h(Flash, { key: m.id, isNew: activityAt(m) > seenSnap(`vip:${id}:messages`) }, h(MessageEntry, { m, body, edited }));
     } }) : h(Empty, { icon: "at", title: onlyChanged ? L("Nada apagado ou editado", "Nothing deleted or edited") : L("Nenhuma mensagem ainda", "No messages yet") }),
     mine.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 50) }, L("Mostrar mais", "Show more")) : null);
 }
@@ -3684,7 +3785,7 @@ function VoiceList({ id, sessions: list }) {
         h("span", { className: "dmtt-chev dmtt-chev-rot" }, h(Icon, { d: ICON_CHEVRON, size: 14 }))),
       liveOpen ? h(VoiceDetail, { v: live, live: true, vipId: id }) : null)) : null,
     mine.length ? h("div", { className: "dmtt-sec-f dmtt-sec-f-top" }, L(`${mine.length} ${plural(mine.length, "call", "calls")} · ${fmtDur(total)} no total · toque numa call pra ver quem estava`, `${mine.length} ${plural(mine.length, "call", "calls")} · ${fmtDur(total)} total · tap a call to see who was there`)) : null,
-    mine.length ? h(DayList, { items: mine, getTime: (v) => v.joinedAt, render: (v) => h(VoiceSessionRow, { key: `${v.joinedAt}-${v.channelId}`, v, vipId: id }) })
+    mine.length ? h(DayList, { items: mine, getTime: (v) => v.joinedAt, render: (v) => h(Flash, { key: `${v.joinedAt}-${v.channelId}`, isNew: (v.joinedAt || 0) > seenSnap(`vip:${id}:voice`) }, h(VoiceSessionRow, { v, vipId: id })) })
       : !live ? h(Empty, { icon: "headset", title: L("Nenhuma call ainda", "No calls yet") }) : null);
 }
 
@@ -3725,6 +3826,14 @@ function VipPersonScreen({ userId: id }) {
   const [tab, setTab] = React.useState(vipVoice.has(id) ? "voice" : "activity");
   const d = loadVip();
   const entry = getVipList()[id];
+  const vk = (t) => `vip:${id}:${t}`;
+  const tabCount = useTabSeen({
+    activity: { keys: [vk("activity")], count: () => d.events.filter((e) => e.userId === id && (e.type === "presence" || e.type === "invisible") && e.at > seenSnap(vk("activity"))).length },
+    messages: { keys: [vk("messages")], count: () => d.messages.filter((m) => m.userId === id && activityAt(m) > seenSnap(vk("messages"))).length },
+    voice: { keys: [vk("voice")], count: () => (d.voice || []).filter((v) => v.userId === id && (v.joinedAt || 0) > seenSnap(vk("voice"))).length },
+    profile: { keys: [vk("profile")], count: () => unseenProfile(seenSnap(vk("profile")), id) },
+    typing: { keys: [] },
+  }, tab);
   if (!entry) return h(Empty, { icon: "star", title: L("Não está mais na Lista VIP", "No longer on your VIP list") });
   const { p, friend, status } = vipStatusNow(id);
   const typing = getHistory().filter((r) => r.userId === id).sort((a, b) => b.lastTypingAt - a.lastTypingAt);
@@ -3732,7 +3841,8 @@ function VipPersonScreen({ userId: id }) {
   const invis = d.events.filter((e) => e.userId === id && e.type === "invisible").length;
   const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
   const dm = ChannelStore?.getDMFromUserId?.(id);
-  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")]];
+  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")]];
+  const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
     h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips },
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
@@ -3741,7 +3851,7 @@ function VipPersonScreen({ userId: id }) {
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível", "invisible")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
     h(WatchProfileRow, { id }),
-    h(Segmented, { value: tab, onChange: setTab, options: [["activity", L("Atividade", "Activity")], ["messages", L("Mensagens", "Messages")], ["voice", vipVoice.has(id) ? "Calls ●" : "Calls"], ["profile", L("Perfil", "Profile")], ["typing", L("Digitou", "Typed")]] }),
+    h(Segmented, { value: tab, onChange: setTab, options: [topt("activity", L("Atividade", "Activity")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
     tab === "profile" ? h(ProfileFeed, { userId: id })
       : tab === "activity" ? h(ActivityList, { id, events: d.events })
       : tab === "messages" ? h(MessagesList, { id, messages: d.messages })
@@ -4043,8 +4153,7 @@ function closeApp() {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true }));
 }
 function openApp(stack) {
-  lastSeenBeforeOpen = getSeenAt();
-  markSeen();
+  resetSeenSnap();
   UI.showConfirmationModal("", h(App, { initial: stack, onClose: closeApp }), { confirmText: L("Fechar", "Close"), cancelText: null });
 }
 const openHub = () => openApp([{ type: "home" }]);
@@ -4113,12 +4222,8 @@ function updateFriendsBadge() {
 function updateBadge() {
   const badge = toolbarBtn?.querySelector(".dmtt-toolbar-badge");
   if (!badge) return;
-  const seen = getSeenAt();
   const n = getSettings().showBadge
-    ? new Set(getHistory().filter((r) => r.lastTypingAt > seen).map((r) => r.userId)).size
-      + getCanceledReqs().filter((r) => (r.canceledAt || 0) > seen).length
-      + getFirstContacts().filter((e) => e.at > seen).length
-      + (mentionData.owner ? mentionData.events.filter((e) => e.at > seen).length : 0)
+    ? unseenTyping(seenOf("typing")) + unseenMentionsAll(seenOf) + unseenFirst(seenOf("contacts:first")) + unseenReqs(seenOf("contacts:requests"))
     : 0;
   badge.hidden = !n;
   badge.textContent = n > 99 ? "99+" : String(n);
@@ -4468,8 +4573,13 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-addid-msg.is-ok { color: var(--c-green); }
 .dmtt-addid-msg.is-err { color: #ff6961; }
 .dmtt-select-wide { max-width: 100%; width: 100%; height: 34px; }
-.dmtt-seg-n.is-alert { opacity: 1; min-width: 16px; height: 16px; padding: 0 5px; margin-left: 6px; box-sizing: border-box; border-radius: 8px; background: #ff3b30; color: #fff; font-size: 11px; font-weight: 600; line-height: 16px; display: inline-block; }
+.dmtt-seg-n.is-alert { opacity: 1; min-width: 16px; height: 16px; padding: 0 5px; margin-left: 0; box-sizing: border-box; border-radius: 8px; background: #ff3b30; color: #fff; font-size: 11px; font-weight: 600; line-height: 16px; display: inline-block; }
 .dmtt-fr { transition: background-color 1.2s ease; }
+.dmtt-flashwrap { position: relative; transition: background-color 1.2s ease; }
+.dmtt-flashwrap.is-flash, .dmtt-flashwrap.is-flash > .dmtt-card, .dmtt-flashwrap.is-flash > .dmtt-cell { background-color: rgba(10, 132, 255, .09); }
+.dmtt-flashwrap > .dmtt-card, .dmtt-flashwrap > .dmtt-cell { transition: background-color 1.2s ease; }
+.dmtt-flashdot { position: absolute; left: 4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #0a84ff; z-index: 2; pointer-events: none; }
+.dmtt-flashwrap > .dmtt-card ~ .dmtt-flashdot, .dmtt-flashwrap:has(> .dmtt-card) > .dmtt-flashdot { top: 22px; margin-top: 0; }
 .dmtt-fr.is-flash { background-color: rgba(10, 132, 255, .09); }
 .dmtt-fr-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .dmtt-fr-name .dmtt-newdot { margin-right: 0; vertical-align: 0; }
@@ -4541,6 +4651,7 @@ const SUBS = {
 module.exports = class Lurk {
   start() {
     lurkAlive = true;
+    seenMapCache = null;
     settingsCache = null;
     historyCache = null;
     vipData.owner = null;
@@ -4680,7 +4791,7 @@ module.exports = class Lurk {
   }
 
   getSettingsPanel() {
-    lastSeenBeforeOpen = getSeenAt();
+    resetSeenSnap();
     return h("div", { className: "dmtt-settings-host" }, h(App, { initial: [{ type: "home" }, { type: "settings" }] }));
   }
 };
