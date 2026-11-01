@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.9.2
+ * @version 2.9.3
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.9.2";
+const VERSION = "2.9.3";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.9.3", items: [
+    ["improved", "Histórico VIP › Mensagens: \"Tudo\" agora mostra todas as mensagens dos VIPs, não só as apagadas e editadas. Os filtros Apagadas, Editadas e Enviadas continuam.", "VIP history › Messages: \"All\" now shows every VIP message, not just deleted and edited ones. The Deleted, Edited and Sent filters are still there."],
+  ] },
   { version: "2.9.2", items: [
     ["improved", "Digitou e apagou nos servidores agora vem desligado e mostra os riscos antes de ligar. Ele foi desligado para todos nesta atualização; para usar de novo, ligue em Ajustes › Lista VIP.", "Typed & quit in servers is now off by default and shows the risks before you turn it on. This update turns it off for everyone; to use it again, turn it on in Settings › VIP list."],
     ["improved", "O Lurk busca o perfil dos VIPs bem menos vezes e um de cada vez, em vez de todos juntos.", "Lurk loads your VIPs' profiles far less often and one at a time instead of all at once."],
@@ -2560,6 +2563,16 @@ function vipFeedItems() {
   }
   return out.sort((a, b) => activityAt(b) - activityAt(a));
 }
+function vipAllItems() {
+  const seen = new Set();
+  const out = [];
+  for (const m of loadVip().messages) {
+    if (!isVip(m.userId) || seen.has(m.id)) continue;
+    seen.add(m.id); out.push(m);
+  }
+  return out.sort((a, b) => activityAt(b) - activityAt(a));
+}
+const isFeedItem = (m) => !!(m.deletedAt || m.edits?.length || m.watched);
 const unseenTyping = (seen) => new Set(getHistory().filter((r) => r.lastTypingAt > seen).map((r) => r.userId)).size;
 const unseenMention = (type, seen) => (mentionData.owner ? mentionData.events : loadMentions().events).filter((e) => e.type === type && e.at > seen).length;
 const unseenMentionsAll = (get) => MENTION_TYPES.reduce((n, t) => n + unseenMention(t, get(`mention:${t}`)), 0);
@@ -3838,7 +3851,7 @@ function MessagesFeed({ channelId }) {
   const query = normalize(q.trim());
   const arch = useArchiveMessages(archives, !!query && inArchive);
   const seenBefore = seenSnap("vipHist:messages");
-  const all = vipFeedItems();
+  const all = vipAllItems();
   const here = channelId ? all.filter((m) => m.channelId === channelId) : [];
   const [where, setWhere] = useNavState("where", here.length ? "here" : "all");
   const [kind, setKind] = useNavState("kind", "all");
@@ -3881,8 +3894,8 @@ function MessagesFeed({ channelId }) {
     h(Group, null, h(NavRow, { icon: "archive", color: "#8e8e93", title: L("Mensagens antigas", "Old messages"), detail: archives.length ? `${archives.length}` : L("Nenhuma", "None"), onClick: () => nav.push({ type: "archives" }) })),
     here.length ? h(Segmented, { value: where, onChange: setWhere, options: [["here", hereLabel, here.length], ["all", L("Todos os lugares", "Everywhere"), all.length]] }) : null,
     h(Segmented, { value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd], ...(nSent ? [["sent", L("Enviadas", "Sent"), nSent]] : [])] }),
-    list.length ? h(DayList, { items: list.slice(0, limit), getTime: activityAt, render: (m) => h(Flash, { key: m.id, isNew: activityAt(m) > seenBefore }, h(ChangeCard, { m, isNew: false, showPlace: where === "all" })) })
-      : h(Empty, { icon: "clock", title: L("Nada por aqui", "Nothing here") }, L("Quando um VIP apagar ou editar uma mensagem, aparece aqui.", "When a VIP deletes or edits a message, it shows up here.")),
+    list.length ? h(DayList, { items: list.slice(0, limit), getTime: activityAt, render: (m) => h(Flash, { key: m.id, isNew: isFeedItem(m) && activityAt(m) > seenBefore }, h(ChangeCard, { m, isNew: false, showPlace: where === "all" })) })
+      : h(Empty, { icon: "clock", title: L("Nada por aqui", "Nothing here") }, kind === "all" ? L("Quando um VIP mandar, editar ou apagar uma mensagem, aparece aqui.", "When a VIP sends, edits or deletes a message, it shows up here.") : L("Quando um VIP apagar ou editar uma mensagem, aparece aqui.", "When a VIP deletes or edits a message, it shows up here.")),
     list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 40) }, L("Mostrar mais", "Show more")) : null);
 }
 function ChangeCard({ m, isNew, showPlace }) {
