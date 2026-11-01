@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.8.0
+ * @version 2.8.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.8.0";
+const VERSION = "2.8.1";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.8.1", items: [
+    ["improved", "As bolinhas de status agora têm as mesmas formas do Discord: Ausente é uma lua, Não perturbar tem um traço e Invisível/Offline é um anel.", "Status dots now use Discord's own shapes: Idle is a moon, Do Not Disturb has a bar and Invisible/Offline is a ring."],
+    ["improved", "Contadores vermelhos menores, com o número mais legível.", "Smaller red counters with easier-to-read numbers."],
+    ["fixed", "Em Digitou e apagou, a foto da pessoa mostrava o status de quando ela digitou em vez do status atual.", "In Typed & quit, the person's avatar showed their status from when they typed instead of their current status."],
+  ] },
   { version: "2.8.0", items: [
     ["new", "Itens novos destacados em todas as listas do Lurk, e um contador vermelho em cada categoria e aba com o que ainda não foi visto.", "New items are highlighted in every Lurk list, with a red counter on each category and tab showing what you haven't seen yet."],
     ["new", "Lista VIP: nova opção \"Mandar mensagem num servidor\" em \"Avisar quando\". Avisa e conta no ícone do Histórico VIP quando aquele VIP manda mensagem num servidor.", "VIP list: new \"They send a message in a server\" option under \"Notify me when\". Notifies you and counts on the VIP history icon when that VIP sends a message in a server."],
@@ -843,6 +848,12 @@ function fmtPresence(p, isFriend) {
   return `${STATUS_PT[st] || st}${dev ? ` (${dev})` : ""}`;
 }
 const fmtDevices = (devices) => (devices || []).map((d) => DEVICE_PT[d] || d).join(", ");
+function currentStatus(id, isFriend) {
+  const st = rawPresence(id)?.status;
+  if (!st) return null;
+  if (st !== "offline") return st;
+  return isFriend ?? isFriendOf(id) ? "offline" : null;
+}
 const lastPresence = (r) => { const a = attemptsOf(r); const x = a[a.length - 1]; return x?.presenceEnd || x?.presence || null; };
 const recordInvisible = (r) => attemptsOf(r).some((a) => effectiveStatus(a.presence, r.isFriend) === "invisible" || effectiveStatus(a.presenceEnd, r.isFriend) === "invisible");
 
@@ -2830,7 +2841,7 @@ function PersonRow({ rows, onOpen }) {
     isVip(latest.userId) ? "VIP" : null,
   ]);
   return h("button", { className: "dmtt-row", onClick: onOpen },
-    h(Avatar, { userId: latest.userId, url: latest.avatarURL, status: effectiveStatus(lastPresence(latest), latest.isFriend) }),
+    h(Avatar, { userId: latest.userId, url: latest.avatarURL, status: currentStatus(latest.userId, isFriendOf(latest.userId)) }),
     h("span", { className: "dmtt-row-main" },
       h("span", { className: "dmtt-row-title" }, displayName(latest), uname ? h("span", { className: "dmtt-row-user" }, ` @${uname}`) : null),
       h("span", { className: "dmtt-row-sub" }, sub)),
@@ -2925,7 +2936,7 @@ function PersonScreen({ userId, channelId }) {
   ].filter(Boolean);
   const dmRow = rows.find((r) => r.channelType !== "guild");
   return h(React.Fragment, null,
-    h(Hero, { userId, url: latest.avatarURL, status: effectiveStatus(lastPresence(latest), latest.isFriend), name: displayName(latest), username: usernameOf(userId, latest), chips },
+    h(Hero, { userId, url: latest.avatarURL, status: currentStatus(userId, isFriendOf(userId)), name: displayName(latest), username: usernameOf(userId, latest), chips },
       dmRow ? h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dmRow.channelId, userId, dmRow.channelType === "group") }) : null,
       h(ActionButton, { icon: h(SIcon, { d: SI.star, size: 18 }), label: vip ? L("É VIP", "VIP") : L("Tornar VIP", "Add VIP"), tone: vip ? "vip" : null, onClick: () => toggleVip(userId, displayName(latest)) }),
       vip ? h(ActionButton, { icon: h(SIcon, { d: SI.sparkle, size: 18 }), label: L("Ver VIP", "View VIP"), onClick: () => nav.push({ type: "vipPerson", userId }) }) : null,
@@ -4461,16 +4472,17 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 
 .dmtt-av { position: relative; flex: none; }
 .dmtt-av img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
-.dmtt-dot { position: absolute; right: -2px; bottom: -2px; box-sizing: border-box; border-radius: 50%; border: 2.5px solid var(--c-fill); background: #80848e; }
-.dmtt-hero .dmtt-dot { border-color: var(--modal-background, var(--background-primary, #313338)); }
-.dmtt-dot-online { background: #23a55a !important; }
-.dmtt-dot-idle { background: #f0b232 !important; }
-.dmtt-dot-dnd { background: #f23f43 !important; }
-.dmtt-dot-streaming { background: #593695 !important; }
-.dmtt-dot-offline { background: #80848e !important; }
-.dmtt-dot-invisible { background: transparent !important; box-shadow: inset 0 0 0 2.5px #80848e; }
-.dmtt-dot.dmtt-dot-invisible { background: var(--c-fill) !important; }
-.dmtt-tl-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--c-muted); margin: 0 6px 0 2px; }
+.dmtt-dot { position: absolute; right: -2px; bottom: -2px; box-sizing: border-box; border-radius: 50%; border: 2.5px solid var(--c-fill); background: var(--c-fill); }
+.dmtt-hero .dmtt-dot { border-color: var(--modal-background, var(--background-primary, #313338)); background: var(--modal-background, var(--background-primary, #313338)); }
+.dmtt-dot::after, .dmtt-tl-dot::after { content: ""; position: absolute; inset: 0; background: var(--dot-c, #80848e); -webkit-mask: var(--dot-m) center / contain no-repeat; mask: var(--dot-m) center / contain no-repeat; }
+.dmtt-dot, .dmtt-tl-dot { --dot-c: #80848e; --dot-m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Ccircle cx='5' cy='5' r='5'/%3E%3C/svg%3E"); }
+.dmtt-dot-online { --dot-c: #23a55a; --dot-m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Ccircle cx='5' cy='5' r='5'/%3E%3C/svg%3E"); }
+.dmtt-dot-idle { --dot-c: #f0b232; --dot-m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cmask id='m'%3E%3Crect width='10' height='10' fill='white'/%3E%3Ccircle cx='2.5' cy='2.5' r='3.75' fill='black'/%3E%3C/mask%3E%3Ccircle cx='5' cy='5' r='5' mask='url(%23m)'/%3E%3C/svg%3E"); }
+.dmtt-dot-dnd { --dot-c: #f23f43; --dot-m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cmask id='m'%3E%3Crect width='10' height='10' fill='white'/%3E%3Crect x='2.5' y='3.75' width='5' height='2.5' rx='1.25' fill='black'/%3E%3C/mask%3E%3Ccircle cx='5' cy='5' r='5' mask='url(%23m)'/%3E%3C/svg%3E"); }
+.dmtt-dot-streaming { --dot-c: #593695; --dot-m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cmask id='m'%3E%3Crect width='10' height='10' fill='white'/%3E%3Cpath d='M3.75 3l3.5 2-3.5 2z' fill='black'/%3E%3C/mask%3E%3Ccircle cx='5' cy='5' r='5' mask='url(%23m)'/%3E%3C/svg%3E"); }
+.dmtt-dot-offline, .dmtt-dot-invisible { --dot-c: #80848e; --dot-m: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cmask id='m'%3E%3Crect width='10' height='10' fill='white'/%3E%3Ccircle cx='5' cy='5' r='2.5' fill='black'/%3E%3C/mask%3E%3Ccircle cx='5' cy='5' r='5' mask='url(%23m)'/%3E%3C/svg%3E"); }
+.dmtt-tl-dot { position: relative; width: 10px; height: 10px; flex: none; margin: 0 6px 0 2px; }
+.dmtt-tl-dot:not([class*="dmtt-dot-"]) { --dot-c: var(--c-muted); }
 .dmtt-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c-green); flex: none; margin: 0 6px 0 2px; animation: dmtt-pulse 1.6s infinite; }
 .dmtt-live-inline { color: var(--c-green); font-weight: 500; }
 @keyframes dmtt-pulse { 0% { box-shadow: 0 0 0 0 rgba(48,209,88,.6); } 70% { box-shadow: 0 0 0 7px rgba(48,209,88,0); } 100% { box-shadow: 0 0 0 0 rgba(48,209,88,0); } }
