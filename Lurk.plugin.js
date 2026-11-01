@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.9.3
+ * @version 2.9.4
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.9.3";
+const VERSION = "2.9.4";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.9.4", items: [
+    ["fixed", "O Lurk agora identifica mensagens apagadas e editadas antes de qualquer outro plugin. Isso resolve conflitos que às vezes impediam o registro de mensagens dos VIPs, ghost pings e respostas apagadas.", "Lurk now picks up deleted and edited messages before any other plugin. This fixes conflicts that sometimes kept VIP messages, ghost pings and deleted replies from being logged."],
+  ] },
   { version: "2.9.3", items: [
     ["improved", "Histórico VIP › Mensagens: \"Tudo\" agora mostra todas as mensagens dos VIPs, não só as apagadas e editadas. Os filtros Apagadas, Editadas e Enviadas continuam.", "VIP history › Messages: \"All\" now shows every VIP message, not just deleted and edited ones. The Deleted, Edited and Sent filters are still there."],
   ] },
@@ -1251,6 +1254,19 @@ function markDeleted(ids) {
 }
 const onMessageDelete = (a) => { try { if (a?.id) { markDeleted([a.id]); handleMentionDelete([a.id]); } } catch (e) { Logger.error("MESSAGE_DELETE", e); } };
 const onMessageDeleteBulk = (a) => { try { if (a?.ids?.length) { markDeleted(a.ids); handleMentionDelete(a.ids); } } catch (e) { Logger.error("MESSAGE_DELETE_BULK", e); } };
+const earlyHandled = new WeakSet();
+const EARLY = { MESSAGE_UPDATE: onMessageUpdate, MESSAGE_DELETE: onMessageDelete, MESSAGE_DELETE_BULK: onMessageDeleteBulk };
+const onceEarly = (fn) => (a) => { if (a && typeof a === "object" && earlyHandled.has(a)) return; fn(a); };
+function onEarlyDispatch(a) {
+  if (!a || typeof a !== "object" || !EARLY[a.type] || earlyHandled.has(a)) return;
+  safe(() => snipeInterceptor(a));
+  earlyHandled.add(a);
+  EARLY[a.type](a);
+}
+function patchEarlyDispatch() {
+  if (typeof Dispatcher?.dispatch !== "function") return;
+  try { Patcher.before(Dispatcher, "dispatch", (_, args) => { try { onEarlyDispatch(args[0]); } catch {} }); } catch (e) { Logger.error("dispatch patch", e); }
+}
 
 const mentionCache = new Map();
 const reactionCache = new Map();
@@ -2588,7 +2604,7 @@ const snipeCountFor = (channelId) => (channelId ? vipChanges().filter((m) => m.c
 let snipeActive = false;
 function snipeInterceptor(action) {
   try {
-    if (!snipeActive || (action.type !== "MESSAGE_DELETE" && action.type !== "MESSAGE_UPDATE")) return false;
+    if (!snipeActive || (action.type !== "MESSAGE_DELETE" && action.type !== "MESSAGE_UPDATE") || earlyHandled.has(action)) return false;
     const s = getSettings();
     if (!s.vipRecordMessages) return false;
     const id = action.id || action.message?.id;
@@ -5131,9 +5147,9 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 const SUBS = {
   TYPING_START: onTypingStart,
   MESSAGE_CREATE: onMessageCreate,
-  MESSAGE_UPDATE: onMessageUpdate,
-  MESSAGE_DELETE: onMessageDelete,
-  MESSAGE_DELETE_BULK: onMessageDeleteBulk,
+  MESSAGE_UPDATE: onceEarly(onMessageUpdate),
+  MESSAGE_DELETE: onceEarly(onMessageDelete),
+  MESSAGE_DELETE_BULK: onceEarly(onMessageDeleteBulk),
   RELATIONSHIP_ADD: (a) => { onRelationshipAdd(a); onFriendAdded(a); },
   RELATIONSHIP_REMOVE: (a) => { onFriendRemoved(a); onRelationshipRemove(a); },
   MESSAGE_REACTION_ADD: onReactionAdd,
@@ -5161,6 +5177,7 @@ module.exports = class Lurk {
 
     if (safe(() => migrateLegacy())) { settingsCache = null; toast(L("Lurk: seus dados do DMTypingTracker foram importados.", "Lurk: your DMTypingTracker data was imported."), { type: "success" }); }
     for (const [ev, fn] of Object.entries(SUBS)) Dispatcher.subscribe(ev, fn);
+    patchEarlyDispatch();
 
     window.__dmttSnipeHook = snipeInterceptor;
     snipeActive = true;
