@@ -30,7 +30,8 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
 - **Typed & quit in servers**, across all your shared servers (experimental).
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
-- Per-VIP choice of which events notify you.
+- **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, and whether they're on desktop or mobile.
+- Per-VIP choice of which events notify you, including when they send a message in a server.
 
 ### 🕘 VIP history
 A single feed (clock button in the top bar) with an unread badge:
@@ -54,9 +55,9 @@ A single feed (clock button in the top bar) with an unread badge:
 ### 🔔 Friends
 Off by default; turn it on in **Settings → Friends**. A top bar button with an unread counter (no notifications):
 - **New requests**: every pending friend request with when it was sent, account age, mutual friends and mutual servers (hover to see who) and Nitro. Accept, decline or view the profile right from the card.
-- **Tags**: *New account* and *Possible bot* (a very new account with no mutual friends, no connected accounts and no Nitro).
+- **Tags**: *New account*, *Possible bot* (a very new account with no mutual friends, no connected accounts and no Nitro) and *You declined* for people you already declined who asked again.
 - **Quick filters**: All · Mutual · New account · Bots.
-- **Spam filter**: pick servers to ignore and requests from their members go to **Spam** (right at the top of the list), even if they leave the server afterwards. Optionally send possible bots to Spam too.
+- **Spam filter**: pick servers to ignore and requests from their members go to **Spam** (right at the top of the list), even if they leave the server afterwards. Optionally send possible bots, or people you already declined, to Spam too.
 - **Bulk actions**: decline all possible bots, or everything in Spam, one per second so Discord doesn't rate-limit you.
 - **Removed you**: people who unfriended you, including while your Discord was closed.
 
@@ -64,6 +65,8 @@ Off by default; turn it on in **Settings → Friends**. A top bar button with an
 Total time in calls with each person, kept forever, plus the details of your recent calls (when, where and who was there).
 
 ### And also
+- **Discreet mode**: hides Lurk's buttons and counters, the typing avatar and "offline for…", and silences notifications, while Lurk keeps logging. Toggle it with **Ctrl+Shift+L** (you can change the shortcut), and optionally turn it on automatically while you share your screen.
+- **New items are highlighted**, with red counters showing what you haven't seen yet.
 - **Notifications** per event: in-app toast, desktop notification and/or sound, with a master switch for in-app toasts.
 - **Sounds**: a beep, any Discord sound, or your own audio file, with a volume setting.
 - **Focus mode**: silences notifications while you're on Do Not Disturb or playing a game. Everything is still logged.
