@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.8.2
+ * @version 2.8.3
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.8.2";
+const VERSION = "2.8.3";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.8.3", items: [
+    ["improved", "Ao voltar para a tela anterior, o Lurk volta na mesma aba, com os mesmos filtros e na mesma posição da lista. Tudo volta ao padrão quando você fecha e abre de novo.", "Going back returns you to the same tab, filters and scroll position you left. Everything resets when you close and reopen Lurk."],
+  ] },
   { version: "2.8.2", items: [
     ["fixed", "O conteúdo das janelas agora fica alinhado com o topo dos dois lados, com ou sem barra de rolagem.", "Window content now lines up with the top bar on both sides, with or without a scrollbar."],
     ["fixed", "As etiquetas do perfil (Amigo, Ausente…) voltaram a ficar centralizadas.", "Profile tags (Friend, Idle…) are centered again."],
@@ -2680,6 +2683,14 @@ const confirmDanger = (title, text, onConfirm, confirmText) =>
 
 const NavCtx = React.createContext(null);
 const useNav = () => React.useContext(NavCtx);
+function useNavState(key, init) {
+  const nav = useNav();
+  const entry = nav?.stack?.[nav.stack.length - 1];
+  const field = `_${key}`;
+  const [v, setV] = React.useState(() => (entry && field in entry ? entry[field] : typeof init === "function" ? init() : init));
+  const set = React.useCallback((x) => { setV(x); if (entry) entry[field] = x; }, [entry, field]);
+  return [v, set];
+}
 
 const NAMES = {
   home: () => L("Hoje", "Today"),
@@ -2761,11 +2772,17 @@ function App({ initial, onClose }) {
     return () => { window.removeEventListener("resize", fit); p.style.overflowY = prevOverflow; };
   }, []);
   const nav = React.useMemo(() => ({
-    push: (s) => { setStack((st) => [...st, s]); },
+    push: (s) => { setStack((st) => { const top = st[st.length - 1]; if (top && bodyRef.current) top._scroll = bodyRef.current.scrollTop; return [...st, s]; }); },
     pop: () => setStack((st) => (st.length > 1 ? st.slice(0, -1) : st)),
     popToRoot: () => setStack((st) => st.slice(0, 1)),
   }), []);
-  React.useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [stack.length]);
+  React.useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const want = stack[stack.length - 1]?._scroll || 0;
+    el.scrollTop = want;
+    if (want) requestAnimationFrame(() => { if (bodyRef.current === el) el.scrollTop = want; });
+  }, [stack.length]);
   const top = stack[stack.length - 1];
   const prev = stack[stack.length - 2];
   return h(NavCtx.Provider, { value: { ...nav, stack } },
@@ -2918,8 +2935,8 @@ function TypingScreen({ channelId }) {
   const nav = useNav();
   useTabSeen({ main: { keys: channelId ? [] : ["typing"] } }, "main");
   const typingSnap = seenSnap("typing");
-  const [q, setQ] = React.useState("");
-  const [seg, setSeg] = React.useState("all");
+  const [q, setQ] = useNavState("q", "");
+  const [seg, setSeg] = useNavState("seg", "all");
   const [limit, setLimit] = React.useState(40);
   const base = getHistory().filter((r) => !channelId || r.channelId === channelId);
   const tests = {
@@ -3006,13 +3023,13 @@ function MessageCard({ avatar, name, action, meta, time, body, bodyTone, extra, 
 function MentionsScreen({ initial = "all" }) {
   useBus(mentionBus, settingsBus);
   const nav = useNav();
-  const [seg, setSeg] = React.useState(initial);
+  const [seg, setSeg] = useNavState("seg", initial);
   const mKey = (t) => `mention:${t}`;
   const tabCount = useTabSeen({
     all: { keys: MENTION_TYPES.map(mKey) },
     ...Object.fromEntries(MENTION_TYPES.map((t) => [t, { keys: [mKey(t)], count: () => unseenMention(t, seenSnap(mKey(t))) }])),
   }, seg);
-  const [q, setQ] = React.useState("");
+  const [q, setQ] = useNavState("q", "");
   const [limit, setLimit] = React.useState(40);
   const all = loadMentions().events;
   const count = (t) => all.filter((e) => e.type === t).length;
@@ -3049,7 +3066,7 @@ function MentionsScreen({ initial = "all" }) {
 
 function ContactsScreen({ initial = "first" }) {
   useBus(reqBus);
-  const [seg, setSeg] = React.useState(initial);
+  const [seg, setSeg] = useNavState("seg", initial);
   const tabCount = useTabSeen({
     first: { keys: ["contacts:first"], count: () => unseenFirst(seenSnap("contacts:first")) },
     requests: { keys: ["contacts:requests"], count: () => unseenReqs(seenSnap("contacts:requests")) },
@@ -3222,9 +3239,9 @@ function FriendsScreen({ tab: initialTab }) {
   useBus(friendsBus, settingsBus);
   const nav = useNav();
   const [seen] = React.useState(() => ({ req: getReqSeen(), rem: getRemovedSeen() }));
-  const [tab, setTab] = React.useState(initialTab || "requests");
-  const [rf, setRf] = React.useState("all");
-  const [opened, setOpened] = React.useState(() => new Set([initialTab || "requests"]));
+  const [tab, setTab] = useNavState("tab", initialTab || "requests");
+  const [rf, setRf] = useNavState("rf", "all");
+  const [opened, setOpened] = React.useState(() => new Set([tab]));
   React.useEffect(() => { if (tab === "requests") markReqSeen(); else markRemovedSeen(); setOpened((o) => new Set([...o, tab])); }, [tab]);
   if (!getSettings().friendsEnabled) {
     return h(React.Fragment, null, h(LargeTitle, { title: NAMES.friends() }),
@@ -3335,7 +3352,7 @@ function ProfileFeed({ userId }) {
 function SnipeScreen({ channelId, tab: initialTab }) {
   useBus(vipBus, settingsBus, profileBus);
   const nav = useNav();
-  const [tab, setTab] = React.useState(initialTab || "messages");
+  const [tab, setTab] = useNavState("tab", initialTab || "messages");
   const vips = Object.keys(getVipList());
   if (!vips.length) {
     return h(React.Fragment, null, h(LargeTitle, { title: NAMES.snipe() }),
@@ -3387,7 +3404,7 @@ function StatusFeed() {
   const nav = useNav();
   const list = getVipList();
   const ids = Object.keys(list);
-  const [who, setWho] = React.useState("all");
+  const [who, setWho] = useNavState("statusWho", "all");
   const [limit, setLimit] = React.useState(60);
   const events = loadVip().events.filter((e) => ids.includes(e.userId) && (e.type === "presence" || e.type === "invisible") && (who === "all" || e.userId === who));
   const byUser = new Map();
@@ -3527,7 +3544,7 @@ function ArchiveBlockScreen({ file }) {
 function MessagesFeed({ channelId }) {
   useBus(vipBus, settingsBus, archiveBus);
   const nav = useNav();
-  const [q, setQ] = React.useState("");
+  const [q, setQ] = useNavState("feedQ", "");
   const [inArchive, setInArchive] = React.useState(false);
   const [qLimit, setQLimit] = React.useState(50);
   const archives = getArchives();
@@ -3536,8 +3553,8 @@ function MessagesFeed({ channelId }) {
   const seenBefore = seenSnap("vipHist:messages");
   const all = vipFeedItems();
   const here = channelId ? all.filter((m) => m.channelId === channelId) : [];
-  const [where, setWhere] = React.useState(here.length ? "here" : "all");
-  const [kind, setKind] = React.useState("all");
+  const [where, setWhere] = useNavState("where", here.length ? "here" : "all");
+  const [kind, setKind] = useNavState("kind", "all");
   const [limit, setLimit] = React.useState(40);
   const vips = Object.keys(getVipList()).length;
   if (!vips) return null;
@@ -3692,8 +3709,8 @@ function ActivityList({ id, events }) {
           h("span", { className: "dmtt-row-sub" }, joinNodes([durationOf(e), e.devices?.length && e.to !== "offline" ? h(Devices, { devices: e.devices }) : null]))))) });
 }
 function MessagesList({ id, messages }) {
-  const [onlyChanged, setOnlyChanged] = React.useState(false);
-  const [where, setWhere] = React.useState("all");
+  const [onlyChanged, setOnlyChanged] = useNavState("onlyChanged", false);
+  const [where, setWhere] = useNavState("msgWhere", "all");
   const [limit, setLimit] = React.useState(50);
   let mine = messages.filter((m) => m.userId === id);
   const changed = mine.filter((m) => m.deletedAt || m.edits?.length).length;
@@ -3867,7 +3884,7 @@ function VipPersonScreen({ userId: id }) {
   useBus(vipBus, historyBus);
   useTicker(30000);
   const nav = useNav();
-  const [tab, setTab] = React.useState(vipVoice.has(id) ? "voice" : "activity");
+  const [tab, setTab] = useNavState("tab", () => (vipVoice.has(id) ? "voice" : "activity"));
   const d = loadVip();
   const entry = getVipList()[id];
   const vk = (t) => `vip:${id}:${t}`;
@@ -3907,7 +3924,7 @@ function CallsScreen() {
   useBus(callBus, settingsBus);
   useTicker(30000);
   const nav = useNav();
-  const [onlyFriends, setOnlyFriends] = React.useState(false);
+  const [onlyFriends, setOnlyFriends] = useNavState("onlyFriends", false);
   let totals = callTotals();
   if (onlyFriends) totals = totals.filter((t) => isFriendOf(t.id));
   const max = totals[0]?.ms || 1;
