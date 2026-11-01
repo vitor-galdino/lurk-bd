@@ -105,7 +105,7 @@ Lurk keeps itself up to date. After each update, a window shows what's new in th
 
 ## Privacy
 
-- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIPMessages.config.json`, `LurkBackup.config.json`… and the `LurkArchives` folder). Nothing is uploaded anywhere.
+- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIPMessages.config.json`, `LurkBackup.config.json`… and the `LurkArchives` folder). Discord PTB and Canary keep their own separate copies (`Lurk_ptb.config.json`, `Lurk_canary.config.json`…). Nothing is uploaded anywhere.
 - Lurk only talks to Discord itself (for example to load a friend request's profile or accept a request) and to this repository to download its own updates. Nothing goes to any other server.
 - Lurk only sees what your Discord client already receives. It can't read other people's DMs or servers you're not in.
 - Don't share your config files or the `LurkArchives` folder: they contain your logs.
