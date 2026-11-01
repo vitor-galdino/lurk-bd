@@ -28,14 +28,14 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Profile changes**: name, username and avatar changes for every VIP, with the old and new avatar side by side.
 - **Watch profile** for one VIP at a time: connected accounts added or removed, bio, pronouns and banner, checked every 15 minutes.
 - **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
-- **Typed & quit in servers**, across all your shared servers (experimental).
+- **Typed & quit in servers**, across all your shared servers. Experimental and off by default; Lurk explains the risks before you turn it on.
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
 - **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, and whether they're on desktop or mobile.
 - Per-VIP choice of which events notify you, including when they send a message in a server.
 
 ### 🕘 VIP history
 A single feed (clock button in the top bar) with an unread badge:
-- **Messages**: everything your VIPs deleted or edited, in DMs and servers.
+- **Messages**: every message your VIPs sent, with filters for deleted, edited and server messages you asked to be notified about, in DMs and servers.
 - **Search** through all VIP messages by text, person, channel or server, optionally including old messages.
 - **Old messages**: when VIP messages reach the limit, the oldest ones are archived instead of deleted. Browse, search or delete each archive right inside Lurk.
 - **Status**: every status change.
@@ -58,7 +58,7 @@ Off by default; turn it on in **Settings → Friends**. A top bar button with an
 - **Tags**: *New account*, *Possible bot* (a very new account with no mutual friends, no connected accounts and no Nitro) and *You declined* for people you already declined who asked again.
 - **Quick filters**: All · Mutual · New account · Bots.
 - **Spam filter**: pick servers to ignore and requests from their members go to **Spam** (right at the top of the list), even if they leave the server afterwards. Optionally send possible bots, or people you already declined, to Spam too.
-- **Bulk actions**: decline all possible bots, or everything in Spam, one per second so Discord doesn't rate-limit you.
+- **Bulk actions**: decline all possible bots, or everything in Spam, up to 25 at a time with a few seconds between each.
 - **Removed you**: people who unfriended you, including while your Discord was closed.
 
 ### 📞 Call time
