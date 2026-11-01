@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.8.1
+ * @version 2.8.2
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.8.1";
+const VERSION = "2.8.2";
 const REPO = "vitor-galdino/lurk-bd";
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
 const UPDATE_KEYS = [
@@ -21,6 +21,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.8.2", items: [
+    ["fixed", "O conteúdo das janelas agora fica alinhado com o topo dos dois lados, com ou sem barra de rolagem.", "Window content now lines up with the top bar on both sides, with or without a scrollbar."],
+    ["fixed", "As etiquetas do perfil (Amigo, Ausente…) voltaram a ficar centralizadas.", "Profile tags (Friend, Idle…) are centered again."],
+    ["improved", "Abas que não cabem mostram um degradê na borda indicando que dá para rolar, e a aba aberta fica sempre visível.", "Tabs that don't fit fade at the edge to show you can scroll, and the open tab always stays in view."],
+  ] },
   { version: "2.8.1", items: [
     ["improved", "As bolinhas de status agora têm as mesmas formas do Discord: Ausente é uma lua, Não perturbar tem um traço e Invisível/Offline é um anel.", "Status dots now use Discord's own shapes: Idle is a moon, Do Not Disturb has a bar and Invisible/Offline is a ring."],
     ["improved", "Contadores vermelhos menores, com o número mais legível.", "Smaller red counters with easier-to-read numbers."],
@@ -2560,7 +2565,28 @@ function Avatar({ userId, url, status, size = 40 }) {
     status && status !== "unknown" ? h("span", { className: `dmtt-dot dmtt-dot-${status}`, style: { width: dot, height: dot }, title: STATUS_PT[status] }) : null);
 }
 function Segmented({ value, onChange, options }) {
-  return h("div", { className: "dmtt-seg", role: "tablist" },
+  const ref = React.useRef(null);
+  const [edge, setEdge] = React.useState("");
+  const measure = () => {
+    const el = ref.current;
+    if (!el) return;
+    const more = el.scrollWidth - el.clientWidth > 2;
+    const left = more && el.scrollLeft > 2;
+    const right = more && el.scrollLeft < el.scrollWidth - el.clientWidth - 2;
+    const next = `${left ? "is-fade-left " : ""}${right ? "is-fade-right" : ""}`.trim();
+    setEdge((cur) => (cur === next ? cur : next));
+  };
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    const btn = el?.querySelector(".dmtt-seg-btn.is-on");
+    if (el && btn && el.scrollWidth > el.clientWidth) {
+      const b = btn.offsetLeft, e = b + btn.offsetWidth;
+      if (b < el.scrollLeft + 8) el.scrollLeft = Math.max(0, b - 24);
+      else if (e > el.scrollLeft + el.clientWidth - 8) el.scrollLeft = e - el.clientWidth + 24;
+    }
+    measure();
+  });
+  return h("div", { ref, className: `dmtt-seg ${edge}`, role: "tablist", onScroll: measure },
     options.map(([v, label, n, alert]) => h("button", {
       key: v, role: "tab", "aria-selected": value === v,
       className: `dmtt-seg-btn ${value === v ? "is-on" : ""}`, onClick: () => onChange(v),
@@ -2688,6 +2714,13 @@ function App({ initial, onClose }) {
   React.useLayoutEffect(() => {
     const el = appRef.current;
     if (!el) return;
+    const probe = document.createElement("div");
+    probe.className = "dmtt-body";
+    probe.style.cssText = "position:absolute;visibility:hidden;height:40px;width:80px;overflow-y:scroll;margin:0;animation:none";
+    el.appendChild(probe);
+    const sbw = probe.offsetWidth - probe.clientWidth;
+    probe.remove();
+    el.style.setProperty("--dmtt-sbw", `${Math.max(0, sbw)}px`);
     let p = el.parentElement;
     while (p && p !== document.body) {
       const oy = getComputedStyle(p).overflowY;
@@ -3163,7 +3196,7 @@ function RequestRow({ r, isNew, showSpamWhy }) {
       h("span", { className: "dmtt-fr-head" },
         h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, r.name, h(NitroMark, { prof: p }), r.username ? h("span", { className: "dmtt-fr-user" }, `@${r.username}`) : null),
         h(HoverInfo, { content: L(`Pedido enviado em ${sent}`, `Request sent on ${sent}`), className: "dmtt-fr-time" }, fmtAgo(r.sentAt))),
-      h("span", { className: "dmtt-chips" },
+      h("span", { className: "dmtt-frchips" },
         r.created ? h(FactChip, { icon: FR_ICONS.age, value: fmtAge(Date.now() - r.created), hover: L(`Conta criada em ${created}`, `Account created on ${created}`) }) : null,
         h(FactChip, { icon: FR_ICONS.friends, value: pending ? "…" : mf == null ? "—" : String(mf), muted: pending || !mf,
           hover: pending ? L("Carregando amigos em comum…", "Loading mutual friends…") : h(HoverList, { title: L("Amigos em comum", "Mutual friends"), items: p.friendNames || [], empty: mf == null ? L("Não foi possível carregar", "Couldn't load") : L("Nenhum", "None") }) }),
@@ -4405,7 +4438,7 @@ const CSS = `
 .dmtt-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dmtt-back:hover, .dmtt-nav-icon:hover { background: var(--c-hover); }
 .dmtt-nav-icon { display: inline-flex; padding: 6px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; }
-.dmtt-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px 20px 2px; margin-right: -6px; display: flex; flex-direction: column; gap: 12px; animation: dmtt-push .22s cubic-bezier(.2,.8,.2,1); scrollbar-width: thin; scrollbar-color: var(--scrollbar-thin-thumb, rgba(0,0,0,.4)) var(--scrollbar-thin-track, transparent); }
+.dmtt-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 0 20px 0; margin-right: calc(-1 * var(--dmtt-sbw, 8px)); scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 12px; animation: dmtt-push .22s cubic-bezier(.2,.8,.2,1); scrollbar-width: thin; scrollbar-color: var(--scrollbar-thin-thumb, rgba(0,0,0,.4)) var(--scrollbar-thin-track, transparent); }
 @keyframes dmtt-push { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 .dmtt-largetitle { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 14px 4px 0; }
 .dmtt-largetitle h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.01em; color: var(--c-strong); line-height: 1.15; }
@@ -4420,6 +4453,9 @@ const CSS = `
 
 .dmtt-seg { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--c-fill2); overflow-x: auto; scrollbar-width: none; flex: none; }
 .dmtt-seg::-webkit-scrollbar { display: none; }
+.dmtt-seg.is-fade-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+.dmtt-seg.is-fade-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); }
+.dmtt-seg.is-fade-left.is-fade-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
 .dmtt-seg-btn { flex: 1 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 10px; border: none; border-radius: 7px; background: transparent; color: var(--c-muted); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
 .dmtt-seg-btn:hover { color: var(--c-text); }
 .dmtt-seg-btn.is-on { background: var(--background-modifier-selected, rgba(255,255,255,.12)); color: var(--c-strong); box-shadow: 0 1px 3px rgba(0,0,0,.3); font-weight: 600; }
@@ -4615,7 +4651,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-fr-head { display: flex; align-items: baseline; gap: 8px; }
 .dmtt-fr-head .dmtt-fr-name { flex: 1; min-width: 0; }
 .dmtt-fr-time { flex: none; font-size: 12px; color: var(--text-muted); cursor: default; }
-.dmtt-chips { display: flex; justify-content: flex-start; align-self: stretch; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.dmtt-frchips { display: flex; justify-content: flex-start; align-self: stretch; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .dmtt-fr-tags, .dmtt-fr-actions { align-self: stretch; justify-content: flex-start; }
 .dmtt-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 11px; background: var(--c-fill2, rgba(120,120,128,.2)); color: var(--c-text, var(--text-default)); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; cursor: default; }
 .dmtt-chip svg { opacity: .7; }
