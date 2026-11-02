@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.9.4
+ * @version 2.10.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.9.4";
+const VERSION = "2.10.0";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,11 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.10.0", items: [
+    ["new", "Fotos, vídeos e GIFs dos VIPs agora aparecem direto nas mensagens. Clique para ver em tamanho grande, em tela cheia ou abrir na pasta.", "VIPs' photos, videos and GIFs now show right in the messages. Click to see them large, in full screen or open them in their folder."],
+    ["new", "O Lurk salva os anexos dos VIPs na pasta LurkMedia, com uma pasta para cada pessoa, então eles continuam disponíveis mesmo depois que a mensagem é apagada. Escolha o tamanho máximo da pasta e de cada arquivo em Ajustes › Lista VIP.", "Lurk saves VIPs' attachments in the LurkMedia folder, one folder per person, so they stay available even after the message is deleted. Choose the maximum folder and file size in Settings › VIP list."],
+    ["fixed", "A foto de perfil e o banner anteriores não somem mais quando a pessoa troca: o Lurk guarda a atual e a anterior de cada VIP.", "The previous avatar and banner no longer disappear when someone changes them: Lurk keeps the current and the previous one for each VIP."],
+  ] },
   { version: "2.9.4", items: [
     ["fixed", "O Lurk agora identifica mensagens apagadas e editadas antes de qualquer outro plugin. Isso resolve conflitos que às vezes impediam o registro de mensagens dos VIPs, ghost pings e respostas apagadas.", "Lurk now picks up deleted and edited messages before any other plugin. This fixes conflicts that sometimes kept VIP messages, ghost pings and deleted replies from being logged."],
   ] },
@@ -227,6 +232,9 @@ const DEFAULTS = {
   vipDesktop: true,
   vipSound: false,
   vipMaxMessages: 2000,
+  mediaSave: true,
+  mediaMaxTotalMB: 2048,
+  mediaMaxFileMB: 50,
   vipMaxEvents: 2000,
   vipMaxVoice: 500,
   mentionMax: 1000,
@@ -622,6 +630,295 @@ function deleteVipData(userId) {
   d.messages = d.messages.filter((m) => m.userId !== userId);
   d.voice = d.voice.filter((v) => v.userId !== userId);
   saveVipSoon();
+  safe(() => deleteUserMedia(userId));
+}
+
+const MEDIA_DIR = `LurkMedia${SUFFIX}`;
+const mediaBus = createBus();
+const mediaRoot = () => require("path").join(BdApi.Plugins.folder, MEDIA_DIR);
+const cleanName = (s, max = 40) => String(s || "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, max);
+const userDirName = (uid) => `${cleanName(nameOf(uid, getVipList()[uid] || {})) || "user"} (${uid})`;
+const PROFILE_FILE = /^(avatar|banner)_(current|old)\./;
+function findUserDir(uid, create) {
+  const fs = nodeFs();
+  const path = require("path");
+  const root = mediaRoot();
+  if (!fs.existsSync(root)) { if (!create) return null; fs.mkdirSync(root, { recursive: true }); }
+  const want = userDirName(uid);
+  const found = fs.readdirSync(root).find((n) => n.endsWith(`(${uid})`));
+  if (found) {
+    if (found === want) return path.join(root, found);
+    try { fs.renameSync(path.join(root, found), path.join(root, want)); return path.join(root, want); } catch { return path.join(root, found); }
+  }
+  if (!create) return null;
+  fs.mkdirSync(path.join(root, want), { recursive: true });
+  return path.join(root, want);
+}
+function mediaFilePath(uid, file) {
+  if (!uid || !file) return null;
+  const dir = safe(() => findUserDir(uid, false));
+  if (!dir) return null;
+  const full = require("path").join(dir, file);
+  return safe(() => nodeFs().existsSync(full)) ? full : null;
+}
+function deleteUserMedia(uid) {
+  const dir = findUserDir(uid, false);
+  if (dir) nodeFs().rmSync(dir, { recursive: true, force: true });
+  const pm = getProfileMedia();
+  if (pm[uid]) { delete pm[uid]; Data.save(k("profileMedia"), pm); }
+  mediaBus.emit();
+}
+const extOf = (name) => (String(name || "").match(/\.([a-z0-9]{1,5})(?:$|\?)/i)?.[1] || "").toLowerCase();
+const VIDEO_EXT = ["mp4", "mov", "webm", "m4v", "mkv"];
+const IMAGE_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"];
+function mediaKind(a) {
+  const t = String(a?.type || "");
+  const e = extOf(a?.name) || extOf(a?.url);
+  if (t.startsWith("video/") || VIDEO_EXT.includes(e)) return "video";
+  if (t.startsWith("image/") || IMAGE_EXT.includes(e)) return "image";
+  return "file";
+}
+async function fetchBytes(url, maxBytes) {
+  const net = safe(() => BdApi.Net?.fetch);
+  const res = net ? await BdApi.Net.fetch(url) : await fetch(url);
+  if (!res || (res.ok === false) || (res.status && res.status >= 400)) throw new Error(`HTTP ${res?.status}`);
+  const len = Number(safe(() => res.headers?.get?.("content-length"))) || 0;
+  if (maxBytes && len > maxBytes) throw new Error("too big");
+  const ab = await res.arrayBuffer();
+  if (maxBytes && ab.byteLength > maxBytes) throw new Error("too big");
+  return new Uint8Array(ab);
+}
+function writeFileAsync(full, bytes) {
+  return new Promise((resolve, reject) => {
+    const fs = nodeFs();
+    if (typeof fs.writeFile === "function") fs.writeFile(full, bytes, (err) => (err ? reject(err) : resolve()));
+    else { try { fs.writeFileSync(full, bytes); resolve(); } catch (e) { reject(e); } }
+  });
+}
+const mediaQueue = [];
+let mediaBusy = 0;
+function queueMedia(job) {
+  if (!getSettings().mediaSave) return;
+  mediaQueue.push(job);
+  pumpMedia();
+}
+function pumpMedia() {
+  while (mediaBusy < 2 && mediaQueue.length) {
+    const job = mediaQueue.shift();
+    mediaBusy++;
+    Promise.resolve().then(job).catch(() => {}).finally(() => { mediaBusy--; pumpMedia(); });
+  }
+}
+const maxFileBytes = () => Math.max(1, Number(getSettings().mediaMaxFileMB) || 50) * 1048576;
+function mediaFromMessage(msg) {
+  const out = (msg.attachments || []).map((a) => ({ name: a.filename || a.name || null, url: a.url || null, proxy: a.proxy_url || a.proxyURL || null, type: a.content_type || a.contentType || null, size: Number(a.size) || null }));
+  for (const e of msg.embeds || []) {
+    const t = e?.type;
+    if (t === "gifv" && (e.video?.proxy_url || e.video?.url || e.video?.proxyURL)) out.push({ name: `${cleanName(e.provider?.name || "gif") || "gif"}.mp4`, url: e.video.proxy_url || e.video.proxyURL || e.video.url, type: "video/mp4", size: null, embed: e.url || null });
+    else if (t === "image" && (e.thumbnail?.proxy_url || e.thumbnail?.proxyURL || e.thumbnail?.url || e.image?.url)) { const u = e.thumbnail?.proxy_url || e.thumbnail?.proxyURL || e.thumbnail?.url || e.image?.proxy_url || e.image?.proxyURL || e.image?.url; out.push({ name: `image.${extOf(u) || "png"}`, url: u, type: null, size: null, embed: e.url || null }); }
+  }
+  return out;
+}
+function queueMessageMedia(m) {
+  if (!m?.attachments?.length || !getSettings().mediaSave) return;
+  m.attachments.forEach((a, i) => {
+    if (a.local || a.skipped || !(a.url || a.proxy)) return;
+    if (a.size && a.size > maxFileBytes()) { a.skipped = "size"; return; }
+    queueMedia(async () => {
+      const file = `${m.id}_${i}_${cleanName(a.name, 60) || `file.${extOf(a.url) || "bin"}`}`;
+      const dir = findUserDir(m.userId, true);
+      const full = require("path").join(dir, file);
+      if (!nodeFs().existsSync(full)) {
+        let bytes = null;
+        for (const u of [a.url, a.proxy].filter(Boolean)) { try { bytes = await fetchBytes(u, maxFileBytes()); break; } catch (e) { if (String(e?.message) === "too big") { a.skipped = "size"; saveVipSoon("messages"); return; } } }
+        if (!bytes) return;
+        await writeFileAsync(full, bytes);
+      }
+      a.local = file;
+      saveVipSoon("messages");
+      mediaBus.emit();
+      scheduleMediaLimit();
+    });
+  });
+}
+let mediaLimitTimer = null;
+function scheduleMediaLimit() { clearTimeout(mediaLimitTimer); mediaLimitTimer = setTimeout(() => safe(() => enforceMediaLimit()), 5000); }
+function scanMedia() {
+  const fs = nodeFs();
+  const path = require("path");
+  const root = mediaRoot();
+  const files = [];
+  if (!fs.existsSync(root)) return files;
+  for (const dir of fs.readdirSync(root)) {
+    const full = path.join(root, dir);
+    let list = [];
+    try { if (!fs.statSync(full).isDirectory()) continue; list = fs.readdirSync(full); } catch { continue; }
+    for (const f of list) {
+      try { const st = fs.statSync(path.join(full, f)); if (st.isFile()) files.push({ path: path.join(full, f), size: st.size, at: st.mtimeMs, profile: PROFILE_FILE.test(f) }); } catch {}
+    }
+  }
+  return files;
+}
+function enforceMediaLimit() {
+  const max = Math.max(50, Number(getSettings().mediaMaxTotalMB) || 2048) * 1048576;
+  const files = scanMedia().filter((f) => !f.profile).sort((a, b) => a.at - b.at);
+  let total = files.reduce((n, f) => n + f.size, 0);
+  let removed = 0;
+  for (const f of files) {
+    if (total <= max) break;
+    try { nodeFs().unlinkSync(f.path); total -= f.size; removed++; } catch {}
+  }
+  if (removed) mediaBus.emit();
+}
+const mediaUsage = () => scanMedia().reduce((n, f) => n + f.size, 0);
+const getProfileMedia = () => Data.load(k("profileMedia")) || {};
+const PROFILE_CDN = { avatar: "avatars", banner: "banners" };
+const profileCdn = (uid, field, hash, size) => `https://cdn.discordapp.com/${PROFILE_CDN[field]}/${uid}/${hash}.${String(hash).startsWith("a_") ? "gif" : "png"}?size=${size}`;
+function syncProfileMedia(uid, field, hash, prevHash) {
+  if (!getSettings().mediaSave || !uid || !PROFILE_CDN[field]) return;
+  const cur = getProfileMedia()[uid]?.[field]?.cur;
+  if ((cur ? cur.hash === hash : !hash) && (!cur || mediaFilePath(uid, cur.file))) return;
+  queueMedia(async () => {
+    const fs = nodeFs();
+    const path = require("path");
+    const pm = getProfileMedia();
+    const st = (pm[uid] ||= {})[field] ||= {};
+    const save = () => { Data.save(k("profileMedia"), pm); mediaBus.emit(); };
+    const dir = findUserDir(uid, true);
+    const ext = (h) => (String(h).startsWith("a_") ? "gif" : "png");
+    const exists = (f) => !!f && fs.existsSync(path.join(dir, f));
+    if (st.cur && st.cur.hash === hash && exists(st.cur.file)) return;
+    if (st.cur && st.cur.hash !== hash) {
+      if (st.old?.file && exists(st.old.file)) try { fs.unlinkSync(path.join(dir, st.old.file)); } catch {}
+      st.old = null;
+      if (exists(st.cur.file)) {
+        const oldFile = `${field}_old.${ext(st.cur.hash)}`;
+        try { fs.renameSync(path.join(dir, st.cur.file), path.join(dir, oldFile)); st.old = { hash: st.cur.hash, file: oldFile }; } catch {}
+      }
+      st.cur = null;
+    }
+    if (!st.old && prevHash && prevHash !== hash) {
+      const oldFile = `${field}_old.${ext(prevHash)}`;
+      try { await writeFileAsync(path.join(dir, oldFile), await fetchBytes(profileCdn(uid, field, prevHash, field === "banner" ? 1024 : 512), maxFileBytes())); st.old = { hash: prevHash, file: oldFile }; } catch {}
+    }
+    if (hash) {
+      const curFile = `${field}_current.${ext(hash)}`;
+      for (const f of fs.readdirSync(dir)) if (f.startsWith(`${field}_current.`)) try { fs.unlinkSync(path.join(dir, f)); } catch {}
+      try { await writeFileAsync(path.join(dir, curFile), await fetchBytes(profileCdn(uid, field, hash, field === "banner" ? 1024 : 512), maxFileBytes())); st.cur = { hash, file: curFile }; } catch { st.cur = null; }
+    }
+    save();
+  });
+}
+function profileMediaFile(uid, field, hash) {
+  if (!hash) return null;
+  const st = getProfileMedia()[uid]?.[field];
+  const hit = [st?.cur, st?.old].find((x) => x?.hash === hash);
+  return hit ? mediaFilePath(uid, hit.file) : null;
+}
+const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", avif: "image/avif", mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", m4v: "video/mp4", mkv: "video/x-matroska" };
+function useLocalUrl(full, active = true) {
+  const [url, setUrl] = React.useState(null);
+  React.useEffect(() => {
+    if (!full || !active) return undefined;
+    let alive = true;
+    let made = null;
+    const fs = nodeFs();
+    const done = (err, buf) => {
+      if (!alive || err || !buf) return;
+      made = URL.createObjectURL(new Blob([buf], { type: MIME[extOf(full)] || "application/octet-stream" }));
+      setUrl(made);
+    };
+    try { if (typeof fs.readFile === "function") fs.readFile(full, done); else done(null, fs.readFileSync(full)); } catch {}
+    return () => { alive = false; if (made) URL.revokeObjectURL(made); };
+  }, [full, active]);
+  return url;
+}
+function useVisible() {
+  const ref = React.useRef(null);
+  const [seen, setSeen] = React.useState(false);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return undefined;
+    if (typeof IntersectionObserver !== "function") { setSeen(true); return undefined; }
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setSeen(true); io.disconnect(); } }, { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  return [ref, seen];
+}
+const showInFolder = (full) => safe(() => window.DiscordNative?.fileManager?.showItemInFolder?.(full));
+const viewer = { item: null };
+const viewerBus = createBus();
+function openViewer(item) { viewer.item = item; viewerBus.emit(); }
+function closeViewer() { viewer.item = null; viewerBus.emit(); }
+function MediaFolderRow() {
+  const [used, setUsed] = React.useState(null);
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => mediaBus.sub(() => setTick((t) => t + 1)), []);
+  React.useEffect(() => { const t = setTimeout(() => setUsed(safe(() => mediaUsage()) || 0), 50); return () => clearTimeout(t); }, [tick]);
+  const open = () => { safe(() => { const fs = nodeFs(); if (!fs.existsSync(mediaRoot())) fs.mkdirSync(mediaRoot(), { recursive: true }); }); showInFolder(mediaRoot()); };
+  return h("button", { className: "dmtt-row", onClick: open },
+    h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Abrir pasta LurkMedia", "Open LurkMedia folder"))),
+    h("span", { className: "dmtt-row-detail" }, used == null ? "…" : used ? fmtBytes(used) : L("Vazia", "Empty")),
+    h("span", { className: "dmtt-chev" }, h(Icon, { d: ICON_CHEVRON, size: 14 })));
+}
+function MediaThumb({ uid, a, deleted }) {
+  useBus(mediaBus);
+  const [ref, seen] = useVisible();
+  const kind = mediaKind(a);
+  const full = a.local ? mediaFilePath(uid, a.local) : null;
+  const local = useLocalUrl(kind !== "file" ? full : null, seen);
+  const [broken, setBroken] = React.useState(false);
+  const src = local || (!full && !broken ? a.proxy || a.url : null);
+  const name = a.name || L("arquivo", "file");
+  const open = () => (kind === "file" ? (full ? showInFolder(full) : a.url && window.open(a.url, "_blank")) : openViewer({ uid, a, kind, full, name }));
+  const lost = !src && (broken || (!full && !a.url));
+  return h("button", { ref, className: `dmtt-media is-${kind} ${deleted ? "is-deleted" : ""} ${lost ? "is-lost" : ""}`, title: name, onClick: lost ? undefined : open },
+    kind === "image" && src ? h("img", { src, alt: "", onError: () => (local ? null : setBroken(true)) })
+      : kind === "video" && src ? h(React.Fragment, null, h("video", { src, muted: true, preload: "metadata", playsInline: true, onError: () => (local ? null : setBroken(true)) }), h("span", { className: "dmtt-media-play" }, h(SIcon, { d: "M8 5v14l11-7z", size: 18 })))
+      : h("span", { className: "dmtt-media-file" }, h(SIcon, { d: SI.archive, size: 18 }), h("span", null, lost ? L("Indisponível", "Unavailable") : name)),
+    a.skipped === "size" && !full ? h("span", { className: "dmtt-media-note" }, L("Grande demais para salvar", "Too large to save")) : null);
+}
+function MediaStrip({ m }) {
+  const list = (m.attachments || []).filter((a) => a && (a.url || a.local || a.proxy));
+  if (!list.length) return null;
+  return h("div", { className: "dmtt-media-strip" }, list.map((a, i) => h(MediaThumb, { key: i, uid: m.userId, a, deleted: !!m.deletedAt })));
+}
+function ProfileImg({ uid, field, hash, className, fallback }) {
+  useBus(mediaBus);
+  const full = profileMediaFile(uid, field, hash);
+  const local = useLocalUrl(full);
+  const [broken, setBroken] = React.useState(false);
+  const src = local || (!full ? fallback : null);
+  if (!src || broken) return h("span", { className: `${className} dmtt-pc-lost`, title: L("Imagem não disponível", "Image unavailable") }, "?");
+  return h("img", { className: `${className} is-click`, src, alt: "", onError: () => setBroken(true), onClick: () => openViewer({ uid, kind: "image", full, url: src, name: field === "banner" ? "Banner" : L("Foto de perfil", "Avatar") }) });
+}
+function MediaViewer() {
+  useBus(viewerBus);
+  const it = viewer.item;
+  const local = useLocalUrl(it?.kind !== "file" ? it?.full : null);
+  const mediaRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!it) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); closeViewer(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [it]);
+  React.useEffect(() => () => closeViewer(), []);
+  if (!it) return null;
+  const src = local || (!it.full ? it.url || it.a?.proxy || it.a?.url : null);
+  const full = () => safe(() => mediaRef.current?.requestFullscreen?.());
+  const box = h("div", { className: "dmtt-viewer", onClick: (e) => { if (e.target === e.currentTarget) closeViewer(); } },
+    h("div", { className: "dmtt-viewer-bar" },
+      h("span", { className: "dmtt-viewer-name" }, it.name),
+      h("button", { className: "dmtt-viewer-btn", onClick: full }, L("Tela cheia", "Full screen")),
+      it.full ? h("button", { className: "dmtt-viewer-btn", onClick: () => showInFolder(it.full) }, L("Mostrar na pasta", "Show in folder")) : null,
+      h("button", { className: "dmtt-viewer-btn", onClick: closeViewer, "aria-label": L("Fechar", "Close") }, h(SIcon, { d: "M6 6l12 12M18 6L6 18", size: 16 }))),
+    h("div", { className: "dmtt-viewer-stage", onClick: (e) => { if (e.target === e.currentTarget) closeViewer(); } },
+      !src ? h("div", { className: "dmtt-viewer-wait" }, it.full ? L("Carregando…", "Loading…") : L("Arquivo indisponível", "File unavailable"))
+        : it.kind === "video" ? h("video", { ref: mediaRef, src, controls: true, autoPlay: true, playsInline: true })
+        : h("img", { ref: mediaRef, src, alt: "" })));
+  return box;
 }
 
 const ARCHIVE_DIR = `LurkArchives${SUFFIX}`;
@@ -1219,7 +1516,7 @@ function recordVipMessage(msg, channelId, guildId, ch) {
     channelName: gid ? (ch?.name || null) : (ch?.type === 3 ? channelLabel(ch) : null),
     isDM: !guildId,
     content: msg.content || "",
-    attachments: (msg.attachments || []).map((a) => ({ name: a.filename, url: a.url, type: a.content_type || null })),
+    attachments: mediaFromMessage(msg),
     stickers: (msg.sticker_items || msg.stickerItems || []).map((s) => s.name),
     createdAt: Date.parse(msg.timestamp) || Date.now(),
     edits: [],
@@ -1228,16 +1525,22 @@ function recordVipMessage(msg, channelId, guildId, ch) {
   }, ...d.messages];
   if (d.messages.length > max) enforceMessageLimit();
   saveVipSoon("messages");
+  safe(() => queueMessageMedia(d.messages[0]));
 }
 function onMessageUpdate(action) {
   try {
     const msg = action?.message;
     if (!msg?.id) return;
     handleMentionUpdate(msg);
-    if (typeof msg.content !== "string") return;
     const d = loadVip();
     const m = d.messages.find((x) => x.id === msg.id);
     if (!m) return;
+    if (Array.isArray(msg.embeds) && msg.embeds.length) {
+      const have = new Set((m.attachments || []).map((a) => a.embed || a.url));
+      const extra = mediaFromMessage({ embeds: msg.embeds }).filter((a) => !have.has(a.embed || a.url));
+      if (extra.length) { m.attachments = [...(m.attachments || []), ...extra]; saveVipSoon("messages"); safe(() => queueMessageMedia(m)); }
+    }
+    if (typeof msg.content !== "string") return;
     const last = m.edits.length ? m.edits[m.edits.length - 1].content : m.content;
     if (last === msg.content) return;
     m.edits.push({ at: Date.parse(msg.edited_timestamp) || Date.now(), content: msg.content });
@@ -2400,6 +2703,8 @@ function checkIdentities(away) {
     if (!now) continue;
     const before = snap[id];
     if (before) evs.push(...diffIdentity(id, before, now, away));
+    safe(() => syncProfileMedia(id, "avatar", now.avatar, before?.avatar));
+    if (before && (before.globalName !== now.globalName || before.username !== now.username)) safe(() => findUserDir(id, false));
     if (!before || before.username !== now.username || before.globalName !== now.globalName || before.avatar !== now.avatar) { snap[id] = now; changed = true; }
   }
   if (changed) Data.save(k("vipIdentity"), snap);
@@ -2431,6 +2736,7 @@ function applyWatchedProfile(id, prof, away) {
   const pick = (f) => (prof[f] !== undefined ? prof[f] || null : prev[f]);
   const now = { bio: pick("bio"), pronouns: pick("pronouns"), banner: pick("banner"), connected: Array.isArray(prof.connected) ? prof.connected : prev.connected, at: Date.now() };
   if (snaps[id]) addProfileEvents(diffWatched(id, snaps[id], now, away));
+  if (now.banner !== undefined) safe(() => syncProfileMedia(id, "banner", now.banner, prev.banner));
   snaps[id] = now;
   Data.save(k("profileWatchSnap"), snaps);
 }
@@ -2617,7 +2923,7 @@ function snipeInterceptor(action) {
     const gid = ch?.guild_id || null;
     if (!gid && !s.vipRecordDMs) return false;
     const ts = m.timestamp?.toISOString?.() || (m.timestamp ? String(m.timestamp) : null);
-    recordVipMessage({ id, author: { id: uid }, content: m.content || "", attachments: m.attachments || [], sticker_items: m.stickerItems || m.sticker_items || [], timestamp: ts }, cid, gid, ch);
+    recordVipMessage({ id, author: { id: uid }, content: m.content || "", attachments: m.attachments || [], embeds: m.embeds || [], sticker_items: m.stickerItems || m.sticker_items || [], timestamp: ts }, cid, gid, ch);
   } catch {}
   return false;
 }
@@ -2930,6 +3236,7 @@ function Stepper({ value, onChange, min = 0, max = 9999, step = 1, unit }) {
 const txt = (v) => (typeof v === "function" ? v() : v);
 function SettingRow({ item }) {
   useBus(settingsBus);
+  if (item.type === "custom") return item.render();
   const value = getSettings()[item.id];
   const apply = (v) => { setSetting(item.id, v); item.after?.(v); };
   const set = (v) => (v === true && item.confirmOn ? UI.showConfirmationModal(txt(item.confirmOn.title), txt(item.confirmOn.text), { danger: true, confirmText: txt(item.confirmOn.confirm), cancelText: L("Cancelar", "Cancel"), onConfirm: () => apply(v) }) : apply(v));
@@ -3084,7 +3391,8 @@ function App({ initial, onClose }) {
         h("span", { className: "dmtt-navbar-spacer" }),
         top.type !== "settings" && top.type !== "settingsPage" ? h("button", { className: "dmtt-nav-icon", title: NAMES.settings(), onClick: () => nav.push({ type: "settings" }) }, h(SIcon, { d: SI.gear, size: 17 })) : null,
         onClose ? h("button", { className: "dmtt-close", title: L("Fechar", "Close"), "aria-label": L("Fechar", "Close"), onClick: onClose }, h(SIcon, { d: "M6 6l12 12M18 6L6 18", size: 17 })) : null),
-      h("div", { className: "dmtt-body", ref: bodyRef, key: stack.length }, h(ScreenRouter, { s: top }))));
+      h("div", { className: "dmtt-body", ref: bodyRef, key: stack.length }, h(ScreenRouter, { s: top })),
+      h(MediaViewer)));
 }
 function LargeTitle({ title, subtitle, right }) {
   return h("div", { className: "dmtt-largetitle" },
@@ -3628,8 +3936,8 @@ function ProfileChangeRow({ e, isNew, showName }) {
     h("span", { className: "dmtt-row-main" },
       h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot" }) : null, showName ? h("b", null, nameOf(e.userId, getVipList()[e.userId] || {})) : null, h("span", { className: "dmtt-pc-what" }, what)),
       detail ? h("span", { className: "dmtt-row-sub" }, detail) : null,
-      e.field === "avatar" ? h("span", { className: "dmtt-pc-imgs" }, h("img", { className: "dmtt-pc-av", src: avatarImg(e.userId, e.from), alt: "" }), h("span", { className: "dmtt-pc-arrow" }, "→"), h("img", { className: "dmtt-pc-av", src: avatarImg(e.userId, e.to), alt: "" })) : null,
-      e.field === "banner" ? h("span", { className: "dmtt-pc-imgs" }, e.from ? h("img", { className: "dmtt-pc-banner", src: bannerImg(e.userId, e.from), alt: "" }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner")), h("span", { className: "dmtt-pc-arrow" }, "→"), e.to ? h("img", { className: "dmtt-pc-banner", src: bannerImg(e.userId, e.to), alt: "" }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner"))) : null,
+      e.field === "avatar" ? h("span", { className: "dmtt-pc-imgs" }, h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.from, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.from) }), h("span", { className: "dmtt-pc-arrow" }, "→"), h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.to, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.to) })) : null,
+      e.field === "banner" ? h("span", { className: "dmtt-pc-imgs" }, e.from ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.from, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.from) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner")), h("span", { className: "dmtt-pc-arrow" }, "→"), e.to ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.to, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.to) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner"))) : null,
       e.field === "bio" ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Antes: ", "Before: ")), e.from || "—"), h("div", null, h("b", null, L("Depois: ", "After: ")), e.to || "—")) : null,
       e.away ? h("span", { className: "dmtt-row-sub" }, L("Mudou enquanto seu Discord estava fechado", "Changed while your Discord was closed")) : null),
     h("span", { className: "dmtt-row-time", title: fmtDate(e.at) }, e.away ? L(`visto ${fmtAgo(e.at)}`, `noticed ${fmtAgo(e.at)}`) : fmtHM(e.at)));
@@ -3920,9 +4228,9 @@ function ChangeCard({ m, isNew, showPlace }) {
   const edits = m.edits || [];
   const deleted = !!m.deletedAt;
   const current = edits.length ? edits[edits.length - 1].content : m.content;
-  const body = (deleted ? current : current) || (m.attachments?.length ? `[${m.attachments.map((a) => a.name).join(", ")}]` : NO_TEXT());
+  const body = current || (m.attachments?.length ? null : NO_TEXT());
   const action = deleted ? (edits.length ? L("editou e depois apagou", "edited, then deleted") : L("apagou", "deleted")) : !edits.length ? L("mandou mensagem", "sent a message") : L(`editou ${edits.length > 1 ? `${edits.length}×` : ""}`, `edited${edits.length > 1 ? ` ${edits.length}×` : ""}`);
-  const place = m.guildId ? `#${m.channelName || L("canal", "channel")} · ${m.guildName || ""}` : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
+  const place = m.guildId ? [`#${m.channelName || L("canal", "channel")}`, m.guildName].filter(Boolean).join(" · ") : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
   return h(MessageCard, {
     avatar: h("button", { className: "dmtt-avbtn", title: L("Ver perfil VIP", "Open VIP profile"), onClick: () => nav.push({ type: "vipPerson", userId: m.userId }) }, h(Avatar, { userId: m.userId, size: 32 })),
     name: h("span", null, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, nameOf(m.userId, getVipList()[m.userId] || {})),
@@ -3930,11 +4238,11 @@ function ChangeCard({ m, isNew, showPlace }) {
     meta: joinNodes([showPlace ? place : null, deleted ? L(`apagada ${fmtHM(m.deletedAt)} · ficou ${fmtDur(m.deletedAt - m.createdAt)} no ar`, `deleted ${fmtHM(m.deletedAt)} · up for ${fmtDur(m.deletedAt - m.createdAt)}`) : null]),
     time: fmtHM(m.createdAt),
     body, bodyTone: deleted ? "deleted" : null,
-    extra: edits.length ? h(React.Fragment, null,
+    extra: h(React.Fragment, null, h(MediaStrip, { m }), edits.length ? h(React.Fragment, null,
       h("button", { className: "dmtt-link", onClick: () => setOpen(!open) }, open ? L("Esconder versões", "Hide versions") : L(`Ver ${edits.length + 1} versões`, `See ${edits.length + 1} versions`)),
       open ? h("div", { className: "dmtt-quote" },
         h("div", null, h("b", null, `${L("Original", "Original")} · ${fmtHM(m.createdAt)}: `), m.content || NO_TEXT()),
-        edits.map((e, i) => h("div", { key: i }, h("b", null, `${fmtHM(e.at)}: `), e.content || NO_TEXT()))) : null) : null,
+        edits.map((e, i) => h("div", { key: i }, h("b", null, `${fmtHM(e.at)}: `), e.content || NO_TEXT()))) : null) : null),
     onJump: deleted ? null : () => jumpTo(m.guildId, m.channelId, m.id),
   });
 }
@@ -4047,7 +4355,7 @@ function MessagesList({ id, messages }) {
 }
 function MessageEntry({ m, body, edited, who }) {
   const [open, setOpen] = React.useState(false);
-  const place0 = m.guildId ? `#${m.channelName || L("canal", "channel")} · ${m.guildName || ""}` : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
+  const place0 = m.guildId ? [`#${m.channelName || L("canal", "channel")}`, m.guildName].filter(Boolean).join(" · ") : m.channelName ? L(`Grupo ${m.channelName}`, `Group ${m.channelName}`) : L("Privado", "DM");
   return h("div", { className: "dmtt-card" },
     h("div", { className: "dmtt-card-head" },
       who ? h(Avatar, { userId: m.userId, size: 22 }) : null,
@@ -4056,7 +4364,7 @@ function MessageEntry({ m, body, edited, who }) {
       edited ? h("button", { className: "dmtt-tag is-btn", onClick: () => setOpen(!open) }, L(`Editada ${m.edits.length}×`, `Edited ${m.edits.length}×`)) : null,
       h("span", { className: "dmtt-row-time" }, fmtHM(m.createdAt))),
     body ? h("div", { className: `dmtt-bubble ${m.deletedAt ? "is-deleted" : ""}` }, body) : null,
-    m.attachments?.length ? h("div", { className: "dmtt-files" }, m.attachments.map((a, i) => h("a", { key: i, href: a.url, target: "_blank", rel: "noreferrer" }, a.name || L("anexo", "attachment")))) : null,
+    h(MediaStrip, { m }),
     open ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Original: ", "Original: ")), m.content || NO_TEXT()), m.edits.map((e, i) => h("div", { key: i }, h("b", null, `${fmtHM(e.at)}: `), e.content || NO_TEXT()))) : null,
     !m.deletedAt ? h("button", { className: "dmtt-link", onClick: () => jumpTo(m.guildId, m.channelId, m.id) }, L("Ir para mensagem", "Jump to message")) : null);
 }
@@ -4450,6 +4758,11 @@ function settingsPages() {
           { ...sw("vipSubscribeTyping", L("Acompanhar todos os servidores em comum", "Watch all shared servers"), L("Experimental. Sem isto o Discord só avisa digitação dos servidores que você abriu.", "Experimental. Without it, Discord only reports typing in servers you've opened.")), after: (v) => v && scheduleSubscribe(), showIf: (st) => st.vipTrackServers },
           sw("vipRecordMessages", L("Registrar mensagens", "Log messages"), L("Texto e anexos, incluindo editadas e apagadas.", "Text and attachments, including edits and deletions.")),
           sw("vipRecordDMs", L("Incluir mensagens no privado", "Include DMs"))] },
+        { title: L("Fotos e vídeos", "Photos and videos"), footer: L("Fotos, vídeos, GIFs e outros anexos dos VIPs, além das fotos de perfil e banners, ficam salvos na pasta LurkMedia, separados por pessoa. Quando a pasta passa do limite, os arquivos mais antigos são apagados primeiro. Fotos de perfil e banners não entram nessa conta: ficam sempre a atual e a anterior de cada pessoa.", "VIPs' photos, videos, GIFs and other attachments, plus avatars and banners, are saved in the LurkMedia folder, one folder per person. When the folder goes over the limit, the oldest files are deleted first. Avatars and banners don't count: the current one and the previous one are always kept for each person."), items: [
+          { ...sw("mediaSave", L("Salvar fotos e vídeos", "Save photos and videos")), after: (v) => v && safe(() => checkIdentities(false)) },
+          { ...num("mediaMaxTotalMB", L("Tamanho máximo da pasta", "Maximum folder size"), 100, 50000, 100, "MB"), after: () => scheduleMediaLimit() },
+          num("mediaMaxFileMB", L("Tamanho máximo por arquivo", "Maximum size per file"), 1, 500, 5, "MB"),
+          { id: "mediaFolder", type: "custom", render: () => h(MediaFolderRow) }] },
         { title: L("Última vez online", "Last online"), footer: L("Aparece embaixo do nome dos VIPs. Só conta o que o Lurk viu com o seu Discord aberto.", "Shows under your VIPs' names. Only counts what Lurk saw while your Discord was open."), items: [
           { ...sw("vipLastSeen", L("Mostrar última vez online", "Show last online")), after: () => syncDOM() },
           { id: "vipLastSeenMode", label: L("Mostrar", "Show"), type: "select", options: [["offline", L("Só quando estiver offline", "Only when offline")], ["both", L("Offline e online", "Offline and online")]], after: () => syncDOM() },
@@ -4869,7 +5182,7 @@ const CSS = `
   --c-sep: var(--border-subtle, rgba(255,255,255,.07));
   --c-link: var(--text-link, #00a8fc);
   --c-red: #ff453a; --c-green: #30d158;
-  display: flex; flex-direction: column; height: min(620px, 70vh); color: var(--c-text); font-size: 14px; line-height: 1.35;
+  display: flex; flex-direction: column; height: min(620px, 70vh); color: var(--c-text); font-size: 14px; line-height: 1.35; position: relative;
   -webkit-font-smoothing: antialiased;
 }
 .dmtt-app button { font-family: inherit; }
@@ -5080,6 +5393,30 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-pc .dmtt-fr-name b { font-weight: 600; }
 .dmtt-pc-imgs { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .dmtt-pc-av { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.dmtt-pc-av.is-click, .dmtt-pc-banner.is-click { cursor: zoom-in; }
+.dmtt-pc-lost { display: inline-flex; align-items: center; justify-content: center; background: var(--c-fill2); color: var(--c-muted); font-size: 12px; font-weight: 600; }
+.dmtt-pc-banner.dmtt-pc-lost { border-radius: 8px; }
+.dmtt-pc-av.dmtt-pc-lost { border-radius: 50%; }
+.dmtt-media-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.dmtt-media { position: relative; display: flex; align-items: center; justify-content: center; width: 132px; height: 96px; padding: 0; border: none; border-radius: 10px; overflow: hidden; background: var(--c-fill2); cursor: zoom-in; color: var(--c-text); }
+.dmtt-media img, .dmtt-media video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.dmtt-media.is-deleted { box-shadow: inset 0 0 0 2px rgba(255,69,58,.55); }
+.dmtt-media.is-deleted img, .dmtt-media.is-deleted video { opacity: .9; }
+.dmtt-media.is-file { width: auto; min-width: 132px; max-width: 100%; height: 40px; padding: 0 12px; cursor: pointer; }
+.dmtt-media.is-lost { cursor: default; color: var(--c-muted); }
+.dmtt-media-file { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dmtt-media.is-image .dmtt-media-file, .dmtt-media.is-video .dmtt-media-file { flex-direction: column; text-align: center; white-space: normal; padding: 0 8px; }
+.dmtt-media-play { position: absolute; width: 34px; height: 34px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; display: flex; align-items: center; justify-content: center; }
+.dmtt-media-note { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; background: rgba(0,0,0,.6); color: #fff; padding: 2px 4px; }
+.dmtt-media.is-file .dmtt-media-note { position: static; background: none; color: var(--c-muted); padding: 0 0 0 8px; font-size: 11px; white-space: nowrap; }
+.dmtt-viewer { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; background: rgba(10,10,12,.94); border-radius: inherit; }
+.dmtt-viewer-bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; }
+.dmtt-viewer-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; color: #fff; }
+.dmtt-viewer-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border: none; border-radius: 8px; background: rgba(255,255,255,.1); color: #fff; font-size: 12.5px; cursor: pointer; }
+.dmtt-viewer-btn:hover { background: rgba(255,255,255,.18); }
+.dmtt-viewer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px 12px; }
+.dmtt-viewer-stage img, .dmtt-viewer-stage video { max-width: 100%; max-height: 100%; border-radius: 8px; background: #000; }
+.dmtt-viewer-wait { color: rgba(255,255,255,.7); font-size: 13px; }
 .dmtt-pc-banner { width: 120px; height: 42px; border-radius: 8px; object-fit: cover; }
 .dmtt-pc-none { font-size: 12px; color: var(--text-muted); }
 .dmtt-pc-arrow { color: var(--text-muted); }
@@ -5219,6 +5556,7 @@ module.exports = class Lurk {
     scheduleSubscribe();
     this.subInterval = setInterval(subscribeVipGuilds, 120000);
     this.backupTimer = setTimeout(() => safe(() => runBackup(false)), 30000);
+    this.mediaTimer = setTimeout(() => safe(() => enforceMediaLimit()), 60000);
     this.backupInterval = setInterval(() => safe(() => runBackup(false)), 6 * 3600000);
     safe(() => initPendingReqs());
     patchRelationshipActions();
@@ -5295,6 +5633,7 @@ module.exports = class Lurk {
     for (const id of [...vipVoice.keys()]) safe(() => closeVoice(id, true));
     safe(() => endMyCall(true));
     clearTimeout(this.backupTimer);
+    clearTimeout(this.mediaTimer); clearTimeout(mediaLimitTimer); mediaQueue.length = 0; closeViewer();
     clearInterval(this.backupInterval);
     clearInterval(this.subInterval);
     clearTimeout(this.updateTimer);
