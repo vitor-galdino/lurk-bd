@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.10.1
+ * @version 2.10.2
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.10.1";
+const VERSION = "2.10.2";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.10.2", items: [
+    ["improved", "Mensagens apagadas e editadas dos VIPs agora mostram a data e a hora em que foram enviadas, além de quando foram apagadas ou editadas e quanto tempo ficaram no ar.", "VIPs' deleted and edited messages now show the date and time they were sent, along with when they were deleted or edited and how long they stayed up."],
+  ] },
   { version: "2.10.1", items: [
     ["improved", "Fotos de perfil e banners dos VIPs agora ficam com todo o histórico, não só a atual e a anterior. Ficam na subpasta Perfil de cada pessoa, com a data no nome, e têm limite próprio de 500 MB, ajustável em Ajustes › Lista VIP. A foto atual de cada um nunca é apagada.", "VIPs' avatars and banners now keep their full history, not just the current and previous one. They're saved in each person's Perfil folder with the date in the name, with their own 500 MB limit you can change in Settings › VIP list. Nobody's current one is ever deleted."],
   ] },
@@ -1222,6 +1225,7 @@ function jumpTo(guildId, channelId, messageId) {
 const pad = (n) => String(n).padStart(2, "0");
 const fmtTime = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const fmtHM = (ms) => fmtTime(ms).slice(0, 5);
+const fmtDM = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}${d.getFullYear() !== new Date().getFullYear() ? `/${d.getFullYear()}` : ""} ${fmtHM(ms)}`; };
 const fmtDate = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${fmtTime(ms)}`; };
 function fmtSecs(ms) {
   const s = Math.round(ms / 1000);
@@ -4331,7 +4335,14 @@ function ChangeCard({ m, isNew, showPlace }) {
     avatar: h("button", { className: "dmtt-avbtn", title: L("Ver perfil VIP", "Open VIP profile"), onClick: () => nav.push({ type: "vipPerson", userId: m.userId }) }, h(Avatar, { userId: m.userId, size: 32 })),
     name: h("span", null, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, nameOf(m.userId, getVipList()[m.userId] || {})),
     action,
-    meta: joinNodes([showPlace ? place : null, deleted ? L(`apagada ${fmtHM(m.deletedAt)} · ficou ${fmtDur(m.deletedAt - m.createdAt)} no ar`, `deleted ${fmtHM(m.deletedAt)} · up for ${fmtDur(m.deletedAt - m.createdAt)}`) : null]),
+    meta: h(React.Fragment, null,
+      showPlace ? h("span", { className: "dmtt-meta-line" }, place) : null,
+      deleted || edits.length ? h("span", { className: "dmtt-meta-line" }, joinNodes([
+        L(`enviada ${fmtDM(m.createdAt)}`, `sent ${fmtDM(m.createdAt)}`),
+        !deleted && edits.length ? L(`editada ${fmtDM(edits[edits.length - 1].at)}`, `edited ${fmtDM(edits[edits.length - 1].at)}`) : null,
+        deleted ? L(`apagada ${fmtDM(m.deletedAt)}`, `deleted ${fmtDM(m.deletedAt)}`) : null,
+        deleted ? L(`ficou ${fmtDur(m.deletedAt - m.createdAt)} no ar`, `up for ${fmtDur(m.deletedAt - m.createdAt)}`) : null,
+      ].filter(Boolean).map((t, i) => h("span", { key: i, className: "dmtt-nowrap" }, t)))) : null),
     time: fmtHM(m.createdAt),
     body, bodyTone: deleted ? "deleted" : null,
     extra: h(React.Fragment, null, h(MediaStrip, { m }), edits.length ? h(React.Fragment, null,
@@ -4456,7 +4467,7 @@ function MessageEntry({ m, body, edited, who }) {
     h("div", { className: "dmtt-card-head" },
       who ? h(Avatar, { userId: m.userId, size: 22 }) : null,
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-sub dmtt-strong" }, who ? `${nameOf(m.userId, getVipList()[m.userId] || {})} · ${place0}` : place0)),
-      m.deletedAt ? h("span", { className: "dmtt-tag is-red", title: fmtDate(m.deletedAt) }, L(`Apagada ${fmtHM(m.deletedAt)}`, `Deleted ${fmtHM(m.deletedAt)}`)) : null,
+      m.deletedAt ? h("span", { className: "dmtt-tag is-red", title: L(`Ficou ${fmtDur(m.deletedAt - m.createdAt)} no ar`, `Up for ${fmtDur(m.deletedAt - m.createdAt)}`) }, L(`Apagada ${fmtDM(m.deletedAt)}`, `Deleted ${fmtDM(m.deletedAt)}`)) : null,
       edited ? h("button", { className: "dmtt-tag is-btn", onClick: () => setOpen(!open) }, L(`Editada ${m.edits.length}×`, `Edited ${m.edits.length}×`)) : null,
       h("span", { className: "dmtt-row-time" }, fmtHM(m.createdAt))),
     body ? h("div", { className: `dmtt-bubble ${m.deletedAt ? "is-deleted" : ""}` }, body) : null,
@@ -5333,6 +5344,9 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-row-title { font-size: 14.5px; font-weight: 500; color: var(--c-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dmtt-row-user { font-weight: 400; font-size: 12.5px; color: var(--c-muted); }
 .dmtt-row-sub { font-size: 12.5px; color: var(--c-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.dmtt-row-sub:has(.dmtt-meta-line) { display: block; -webkit-line-clamp: unset; }
+.dmtt-meta-line { display: block; }
+.dmtt-nowrap { white-space: nowrap; }
 .dmtt-row-detail { font-size: 14px; color: var(--c-muted); white-space: nowrap; flex: none; }
 .dmtt-row-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
 .dmtt-row-time { font-size: 12px; color: var(--c-muted); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
