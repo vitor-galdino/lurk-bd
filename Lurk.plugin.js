@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.10.0
+ * @version 2.10.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.10.0";
+const VERSION = "2.10.1";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.10.1", items: [
+    ["improved", "Fotos de perfil e banners dos VIPs agora ficam com todo o histórico, não só a atual e a anterior. Ficam na subpasta Perfil de cada pessoa, com a data no nome, e têm limite próprio de 500 MB, ajustável em Ajustes › Lista VIP. A foto atual de cada um nunca é apagada.", "VIPs' avatars and banners now keep their full history, not just the current and previous one. They're saved in each person's Perfil folder with the date in the name, with their own 500 MB limit you can change in Settings › VIP list. Nobody's current one is ever deleted."],
+  ] },
   { version: "2.10.0", items: [
     ["new", "Fotos, vídeos e GIFs dos VIPs agora aparecem direto nas mensagens. Clique para ver em tamanho grande, em tela cheia ou abrir na pasta.", "VIPs' photos, videos and GIFs now show right in the messages. Click to see them large, in full screen or open them in their folder."],
     ["new", "O Lurk salva os anexos dos VIPs na pasta LurkMedia, com uma pasta para cada pessoa, então eles continuam disponíveis mesmo depois que a mensagem é apagada. Escolha o tamanho máximo da pasta e de cada arquivo em Ajustes › Lista VIP.", "Lurk saves VIPs' attachments in the LurkMedia folder, one folder per person, so they stay available even after the message is deleted. Choose the maximum folder and file size in Settings › VIP list."],
@@ -235,6 +238,7 @@ const DEFAULTS = {
   mediaSave: true,
   mediaMaxTotalMB: 2048,
   mediaMaxFileMB: 50,
+  mediaMaxProfileMB: 500,
   vipMaxEvents: 2000,
   vipMaxVoice: 500,
   mentionMax: 1000,
@@ -742,7 +746,7 @@ function queueMessageMedia(m) {
   });
 }
 let mediaLimitTimer = null;
-function scheduleMediaLimit() { clearTimeout(mediaLimitTimer); mediaLimitTimer = setTimeout(() => safe(() => enforceMediaLimit()), 5000); }
+function scheduleMediaLimit() { clearTimeout(mediaLimitTimer); mediaLimitTimer = setTimeout(() => { safe(() => enforceMediaLimit()); safe(() => enforceProfileLimit()); }, 5000); }
 function scanMedia() {
   const fs = nodeFs();
   const path = require("path");
@@ -770,49 +774,141 @@ function enforceMediaLimit() {
   }
   if (removed) mediaBus.emit();
 }
-const mediaUsage = () => scanMedia().reduce((n, f) => n + f.size, 0);
+const mediaUsage = () => scanMedia().reduce((n, f) => n + f.size, 0) + scanProfileMedia().reduce((n, f) => n + f.size, 0);
 const getProfileMedia = () => Data.load(k("profileMedia")) || {};
 const PROFILE_CDN = { avatar: "avatars", banner: "banners" };
 const profileCdn = (uid, field, hash, size) => `https://cdn.discordapp.com/${PROFILE_CDN[field]}/${uid}/${hash}.${String(hash).startsWith("a_") ? "gif" : "png"}?size=${size}`;
+const PROFILE_SUB = "Perfil";
+const fileStamp = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}`; };
+const profileExt = (h) => (String(h).startsWith("a_") ? "gif" : "png");
+function currentProfileHash(uid, field) {
+  if (field === "avatar") return getIdentitySnap()[uid]?.avatar ?? identityOf(uid)?.avatar ?? null;
+  return getWatchSnap()[uid]?.banner ?? null;
+}
+function profileState(pm, uid, field) {
+  const st = (pm[uid] ||= {})[field] ||= {};
+  if (!Array.isArray(st.list)) {
+    st.list = [];
+    for (const old of [st.cur, st.old]) if (old?.hash && old.file) st.list.push({ hash: old.hash, file: old.file, at: 0 });
+    delete st.cur; delete st.old;
+  }
+  return st;
+}
+function migrateProfileFiles(uid, field, st, dir) {
+  const fs = nodeFs();
+  const path = require("path");
+  for (const e of st.list) {
+    if (!e.file || e.file.startsWith(`${PROFILE_SUB}/`)) continue;
+    const from = path.join(dir, e.file);
+    if (!fs.existsSync(from)) { e.file = null; continue; }
+    const at = e.at || safe(() => fs.statSync(from).mtimeMs) || Date.now();
+    const name = uniqueProfileName(dir, field, at, profileExt(e.hash));
+    try { fs.renameSync(from, path.join(dir, name)); e.file = name; e.at = at; } catch {}
+  }
+  st.list = st.list.filter((e) => e.file);
+}
+function uniqueProfileName(dir, field, at, ext) {
+  const fs = nodeFs();
+  const path = require("path");
+  const pdir = path.join(dir, PROFILE_SUB);
+  if (!fs.existsSync(pdir)) fs.mkdirSync(pdir, { recursive: true });
+  const base = `${field} ${fileStamp(at)}`;
+  let name = `${base}.${ext}`;
+  for (let i = 2; fs.existsSync(path.join(pdir, name)); i++) name = `${base} (${i}).${ext}`;
+  return `${PROFILE_SUB}/${name}`;
+}
 function syncProfileMedia(uid, field, hash, prevHash) {
   if (!getSettings().mediaSave || !uid || !PROFILE_CDN[field]) return;
-  const cur = getProfileMedia()[uid]?.[field]?.cur;
-  if ((cur ? cur.hash === hash : !hash) && (!cur || mediaFilePath(uid, cur.file))) return;
+  const known = getProfileMedia()[uid]?.[field];
+  const has = (h) => !h || (Array.isArray(known?.list) && known.list.some((e) => e.hash === h && mediaFilePath(uid, e.file)));
+  if (has(hash) && (!prevHash || prevHash === hash || has(prevHash))) return;
   queueMedia(async () => {
-    const fs = nodeFs();
     const path = require("path");
     const pm = getProfileMedia();
-    const st = (pm[uid] ||= {})[field] ||= {};
-    const save = () => { Data.save(k("profileMedia"), pm); mediaBus.emit(); };
+    const st = profileState(pm, uid, field);
     const dir = findUserDir(uid, true);
-    const ext = (h) => (String(h).startsWith("a_") ? "gif" : "png");
-    const exists = (f) => !!f && fs.existsSync(path.join(dir, f));
-    if (st.cur && st.cur.hash === hash && exists(st.cur.file)) return;
-    if (st.cur && st.cur.hash !== hash) {
-      if (st.old?.file && exists(st.old.file)) try { fs.unlinkSync(path.join(dir, st.old.file)); } catch {}
-      st.old = null;
-      if (exists(st.cur.file)) {
-        const oldFile = `${field}_old.${ext(st.cur.hash)}`;
-        try { fs.renameSync(path.join(dir, st.cur.file), path.join(dir, oldFile)); st.old = { hash: st.cur.hash, file: oldFile }; } catch {}
-      }
-      st.cur = null;
-    }
-    if (!st.old && prevHash && prevHash !== hash) {
-      const oldFile = `${field}_old.${ext(prevHash)}`;
-      try { await writeFileAsync(path.join(dir, oldFile), await fetchBytes(profileCdn(uid, field, prevHash, field === "banner" ? 1024 : 512), maxFileBytes())); st.old = { hash: prevHash, file: oldFile }; } catch {}
-    }
-    if (hash) {
-      const curFile = `${field}_current.${ext(hash)}`;
-      for (const f of fs.readdirSync(dir)) if (f.startsWith(`${field}_current.`)) try { fs.unlinkSync(path.join(dir, f)); } catch {}
-      try { await writeFileAsync(path.join(dir, curFile), await fetchBytes(profileCdn(uid, field, hash, field === "banner" ? 1024 : 512), maxFileBytes())); st.cur = { hash, file: curFile }; } catch { st.cur = null; }
-    }
-    save();
+    migrateProfileFiles(uid, field, st, dir);
+    const exists = (h) => st.list.some((e) => e.hash === h && nodeFs().existsSync(path.join(dir, e.file)));
+    const grab = async (h, at) => {
+      const name = uniqueProfileName(dir, field, at, profileExt(h));
+      await writeFileAsync(path.join(dir, name), await fetchBytes(profileCdn(uid, field, h, field === "banner" ? 1024 : 512), maxFileBytes()));
+      st.list = st.list.filter((e) => e.hash !== h);
+      st.list.push({ hash: h, file: name, at });
+    };
+    const now = Date.now();
+    if (prevHash && prevHash !== hash && !exists(prevHash)) try { await grab(prevHash, now - 60000); } catch {}
+    if (hash && !exists(hash)) try { await grab(hash, now); } catch {}
+    st.list.sort((a, b) => b.at - a.at);
+    Data.save(k("profileMedia"), pm);
+    mediaBus.emit();
+    scheduleMediaLimit();
   });
+}
+function migrateAllProfileMedia() {
+  const pm = getProfileMedia();
+  let changed = false;
+  for (const uid of Object.keys(pm)) {
+    for (const field of Object.keys(pm[uid] || {})) {
+      const raw = pm[uid][field];
+      if (Array.isArray(raw?.list) && raw.list.every((e) => e.file?.startsWith(`${PROFILE_SUB}/`))) continue;
+      const dir = safe(() => findUserDir(uid, false));
+      const st = profileState(pm, uid, field);
+      if (dir) migrateProfileFiles(uid, field, st, dir);
+      changed = true;
+    }
+  }
+  if (changed) { Data.save(k("profileMedia"), pm); mediaBus.emit(); }
+}
+function scanProfileMedia() {
+  const fs = nodeFs();
+  const path = require("path");
+  const root = mediaRoot();
+  const files = [];
+  if (!fs.existsSync(root)) return files;
+  for (const dir of fs.readdirSync(root)) {
+    const pdir = path.join(root, dir, PROFILE_SUB);
+    let list = [];
+    try { if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) continue; list = fs.readdirSync(pdir); } catch { continue; }
+    const uid = dir.match(/\((\d+|[^()]+)\)$/)?.[1] || null;
+    for (const f of list) {
+      try { const st = fs.statSync(path.join(pdir, f)); if (st.isFile()) files.push({ uid, rel: `${PROFILE_SUB}/${f}`, path: path.join(pdir, f), size: st.size, at: st.mtimeMs }); } catch {}
+    }
+  }
+  return files;
+}
+function enforceProfileLimit() {
+  const max = Math.max(50, Number(getSettings().mediaMaxProfileMB) || 500) * 1048576;
+  const pm = getProfileMedia();
+  const keep = new Set();
+  const atOf = new Map();
+  for (const uid of Object.keys(pm)) for (const field of Object.keys(pm[uid] || {})) {
+    const list = Array.isArray(pm[uid][field]?.list) ? pm[uid][field].list : [];
+    const cur = currentProfileHash(uid, field);
+    const curEntry = list.find((e) => e.hash === cur) || list[0];
+    if (curEntry?.file) keep.add(`${uid}|${curEntry.file}`);
+    for (const e of list) if (e.file) atOf.set(`${uid}|${e.file}`, e.at);
+  }
+  const files = scanProfileMedia().map((f) => ({ ...f, at: atOf.get(`${f.uid}|${f.rel}`) || f.at }));
+  let total = files.reduce((n, f) => n + f.size, 0);
+  let removed = 0;
+  for (const f of files.filter((x) => !keep.has(`${x.uid}|${x.rel}`)).sort((a, b) => a.at - b.at)) {
+    if (total <= max) break;
+    try { nodeFs().unlinkSync(f.path); total -= f.size; removed++; } catch {}
+  }
+  if (removed) {
+    for (const uid of Object.keys(pm)) for (const field of Object.keys(pm[uid] || {})) {
+      const st = pm[uid][field];
+      if (Array.isArray(st?.list)) st.list = st.list.filter((e) => mediaFilePath(uid, e.file));
+    }
+    Data.save(k("profileMedia"), pm);
+    mediaBus.emit();
+  }
 }
 function profileMediaFile(uid, field, hash) {
   if (!hash) return null;
   const st = getProfileMedia()[uid]?.[field];
-  const hit = [st?.cur, st?.old].find((x) => x?.hash === hash);
+  const list = Array.isArray(st?.list) ? st.list : [st?.cur, st?.old].filter(Boolean);
+  const hit = list.find((x) => x?.hash === hash);
   return hit ? mediaFilePath(uid, hit.file) : null;
 }
 const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", avif: "image/avif", mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", m4v: "video/mp4", mkv: "video/x-matroska" };
@@ -4758,10 +4854,11 @@ function settingsPages() {
           { ...sw("vipSubscribeTyping", L("Acompanhar todos os servidores em comum", "Watch all shared servers"), L("Experimental. Sem isto o Discord só avisa digitação dos servidores que você abriu.", "Experimental. Without it, Discord only reports typing in servers you've opened.")), after: (v) => v && scheduleSubscribe(), showIf: (st) => st.vipTrackServers },
           sw("vipRecordMessages", L("Registrar mensagens", "Log messages"), L("Texto e anexos, incluindo editadas e apagadas.", "Text and attachments, including edits and deletions.")),
           sw("vipRecordDMs", L("Incluir mensagens no privado", "Include DMs"))] },
-        { title: L("Fotos e vídeos", "Photos and videos"), footer: L("Fotos, vídeos, GIFs e outros anexos dos VIPs, além das fotos de perfil e banners, ficam salvos na pasta LurkMedia, separados por pessoa. Quando a pasta passa do limite, os arquivos mais antigos são apagados primeiro. Fotos de perfil e banners não entram nessa conta: ficam sempre a atual e a anterior de cada pessoa.", "VIPs' photos, videos, GIFs and other attachments, plus avatars and banners, are saved in the LurkMedia folder, one folder per person. When the folder goes over the limit, the oldest files are deleted first. Avatars and banners don't count: the current one and the previous one are always kept for each person."), items: [
+        { title: L("Fotos e vídeos", "Photos and videos"), footer: L("Fotos, vídeos, GIFs e outros anexos dos VIPs, além das fotos de perfil e banners, ficam salvos na pasta LurkMedia, separados por pessoa. Quando a pasta passa do limite, os arquivos mais antigos são apagados primeiro. Fotos de perfil e banners têm um limite próprio e ficam guardados com todo o histórico na subpasta Perfil de cada pessoa; quando passam do limite, saem os mais antigos, mas a foto atual de cada um nunca é apagada.", "VIPs' photos, videos, GIFs and other attachments, plus avatars and banners, are saved in the LurkMedia folder, one folder per person. When the folder goes over the limit, the oldest files are deleted first. Avatars and banners have their own limit and keep their full history in each person's Perfil folder; when they go over it, the oldest go first, but nobody's current one is ever deleted."), items: [
           { ...sw("mediaSave", L("Salvar fotos e vídeos", "Save photos and videos")), after: (v) => v && safe(() => checkIdentities(false)) },
           { ...num("mediaMaxTotalMB", L("Tamanho máximo da pasta", "Maximum folder size"), 100, 50000, 100, "MB"), after: () => scheduleMediaLimit() },
           num("mediaMaxFileMB", L("Tamanho máximo por arquivo", "Maximum size per file"), 1, 500, 5, "MB"),
+          { ...num("mediaMaxProfileMB", L("Limite de fotos de perfil e banners", "Avatar and banner limit"), 50, 10000, 50, "MB"), after: () => scheduleMediaLimit() },
           { id: "mediaFolder", type: "custom", render: () => h(MediaFolderRow) }] },
         { title: L("Última vez online", "Last online"), footer: L("Aparece embaixo do nome dos VIPs. Só conta o que o Lurk viu com o seu Discord aberto.", "Shows under your VIPs' names. Only counts what Lurk saw while your Discord was open."), items: [
           { ...sw("vipLastSeen", L("Mostrar última vez online", "Show last online")), after: () => syncDOM() },
@@ -5556,7 +5653,7 @@ module.exports = class Lurk {
     scheduleSubscribe();
     this.subInterval = setInterval(subscribeVipGuilds, 120000);
     this.backupTimer = setTimeout(() => safe(() => runBackup(false)), 30000);
-    this.mediaTimer = setTimeout(() => safe(() => enforceMediaLimit()), 60000);
+    this.mediaTimer = setTimeout(() => { safe(() => migrateAllProfileMedia()); safe(() => enforceMediaLimit()); safe(() => enforceProfileLimit()); }, 60000);
     this.backupInterval = setInterval(() => safe(() => runBackup(false)), 6 * 3600000);
     safe(() => initPendingReqs());
     patchRelationshipActions();
