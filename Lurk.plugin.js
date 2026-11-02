@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.10.2
+ * @version 2.10.3
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.10.2";
+const VERSION = "2.10.3";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.10.3", items: [
+    ["fixed", "Fotos de perfil, banners e fotos e vídeos salvos dos VIPs apareciam como \"?\" ou não abriam, mesmo estando salvos na pasta LurkMedia. Agora aparecem normalmente.", "VIPs' saved avatars, banners, photos and videos showed up as \"?\" or wouldn't open, even though they were saved in the LurkMedia folder. They show up normally now."],
+  ] },
   { version: "2.10.2", items: [
     ["improved", "Mensagens apagadas e editadas dos VIPs agora mostram a data e a hora em que foram enviadas, além de quando foram apagadas ou editadas e quanto tempo ficaram no ar.", "VIPs' deleted and edited messages now show the date and time they were sent, along with when they were deleted or edited and how long they stayed up."],
   ] },
@@ -923,11 +926,12 @@ function useLocalUrl(full, active = true) {
     let made = null;
     const fs = nodeFs();
     const done = (err, buf) => {
-      if (!alive || err || !buf) return;
+      if (!alive) return;
+      if (err || !buf || typeof buf === "string") { setUrl(false); return; }
       made = URL.createObjectURL(new Blob([buf], { type: MIME[extOf(full)] || "application/octet-stream" }));
       setUrl(made);
     };
-    try { if (typeof fs.readFile === "function") fs.readFile(full, done); else done(null, fs.readFileSync(full)); } catch {}
+    try { if (typeof fs.readFile === "function") fs.readFile(full, null, done); else done(null, fs.readFileSync(full, null)); } catch { setUrl(false); }
     return () => { alive = false; if (made) URL.revokeObjectURL(made); };
   }, [full, active]);
   return url;
@@ -968,7 +972,7 @@ function MediaThumb({ uid, a, deleted }) {
   const full = a.local ? mediaFilePath(uid, a.local) : null;
   const local = useLocalUrl(kind !== "file" ? full : null, seen);
   const [broken, setBroken] = React.useState(false);
-  const src = local || (!full && !broken ? a.proxy || a.url : null);
+  const src = local || ((!full || local === false) && !broken ? a.proxy || a.url : null);
   const name = a.name || L("arquivo", "file");
   const open = () => (kind === "file" ? (full ? showInFolder(full) : a.url && window.open(a.url, "_blank")) : openViewer({ uid, a, kind, full, name }));
   const lost = !src && (broken || (!full && !a.url));
@@ -988,7 +992,8 @@ function ProfileImg({ uid, field, hash, className, fallback }) {
   const full = profileMediaFile(uid, field, hash);
   const local = useLocalUrl(full);
   const [broken, setBroken] = React.useState(false);
-  const src = local || (!full ? fallback : null);
+  if (full && local === null) return h("span", { className: `${className} dmtt-pc-lost` });
+  const src = local || fallback;
   if (!src || broken) return h("span", { className: `${className} dmtt-pc-lost`, title: L("Imagem não disponível", "Image unavailable") }, "?");
   return h("img", { className: `${className} is-click`, src, alt: "", onError: () => setBroken(true), onClick: () => openViewer({ uid, kind: "image", full, url: src, name: field === "banner" ? "Banner" : L("Foto de perfil", "Avatar") }) });
 }
@@ -1005,7 +1010,7 @@ function MediaViewer() {
   }, [it]);
   React.useEffect(() => () => closeViewer(), []);
   if (!it) return null;
-  const src = local || (!it.full ? it.url || it.a?.proxy || it.a?.url : null);
+  const src = local || (!it.full || local === false ? it.url || it.a?.proxy || it.a?.url : null);
   const full = () => safe(() => mediaRef.current?.requestFullscreen?.());
   const box = h("div", { className: "dmtt-viewer", onClick: (e) => { if (e.target === e.currentTarget) closeViewer(); } },
     h("div", { className: "dmtt-viewer-bar" },
