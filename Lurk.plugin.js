@@ -5444,7 +5444,8 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-tile-card span:last-child { font-size: 12px; color: var(--c-muted); }
 
 .dmtt-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; }
-.dmtt-card-head { display: flex; align-items: center; gap: 10px; }
+.dmtt-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.dmtt-card-head > .dmtt-row-time { padding-top: 2px; }
 .dmtt-card-action { font-weight: 400; color: var(--c-muted); font-size: 13px; }
 .dmtt-bubble { padding: 8px 12px; border-radius: 14px; background: var(--c-fill2); white-space: pre-wrap; word-break: break-word; font-size: 14px; color: var(--c-text); align-self: flex-start; max-width: 100%; box-sizing: border-box; }
 .dmtt-bubble.is-deleted { color: #ff6961; }
@@ -5493,7 +5494,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-flashwrap.is-flash, .dmtt-flashwrap.is-flash > .dmtt-card, .dmtt-flashwrap.is-flash > .dmtt-cell { background-color: rgba(10, 132, 255, .09); }
 .dmtt-flashwrap > .dmtt-card, .dmtt-flashwrap > .dmtt-cell { transition: background-color 1.2s ease; }
 .dmtt-flashdot { position: absolute; left: 4px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #0a84ff; z-index: 2; pointer-events: none; }
-.dmtt-flashwrap > .dmtt-card ~ .dmtt-flashdot, .dmtt-flashwrap:has(> .dmtt-card) > .dmtt-flashdot { top: 22px; margin-top: 0; }
+.dmtt-flashwrap > .dmtt-card ~ .dmtt-flashdot, .dmtt-flashwrap:has(> .dmtt-card) > .dmtt-flashdot { top: 22.5px; margin-top: 0; }
 .dmtt-fr.is-flash { background-color: rgba(10, 132, 255, .09); }
 .dmtt-fr-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .dmtt-fr-name .dmtt-newdot { margin-right: 0; vertical-align: 0; }
