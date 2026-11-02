@@ -28,6 +28,7 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Profile changes**: name, username and avatar changes for every VIP, with the old and new avatar side by side.
 - **Watch profile** for one VIP at a time: connected accounts added or removed, bio, pronouns and banner, checked every 15 minutes.
 - **Messages** in shared servers and DMs, including **edited and deleted** messages and their attachments.
+- **Photos and videos**: VIPs' photos, videos, GIFs and other attachments are saved on your computer as they arrive, so they stay viewable after the message is deleted. Preview them right in Lurk, open them full screen or in their folder. Their current and previous avatar (and banner, for the watched profile) are kept too. Folder and file size limits in Settings.
 - **Typed & quit in servers**, across all your shared servers. Experimental and off by default; Lurk explains the risks before you turn it on.
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
 - **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, and whether they're on desktop or mobile.
@@ -105,10 +106,10 @@ Lurk keeps itself up to date. After each update, a window shows what's new in th
 
 ## Privacy
 
-- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIPMessages.config.json`, `LurkBackup.config.json`… and the `LurkArchives` folder). Discord PTB and Canary keep their own separate copies (`Lurk_ptb.config.json`, `Lurk_canary.config.json`…). Nothing is uploaded anywhere.
+- Everything Lurk records stays **on your computer**, in BetterDiscord's plugins folder (`Lurk.config.json`, `LurkVIPMessages.config.json`, `LurkBackup.config.json`… and the `LurkArchives` and `LurkMedia` folders). Discord PTB and Canary keep their own separate copies (`Lurk_ptb.config.json`, `Lurk_canary.config.json`…). Nothing is uploaded anywhere.
 - Lurk only talks to Discord itself (for example to load a friend request's profile or accept a request) and to this repository to download its own updates. Nothing goes to any other server.
 - Lurk only sees what your Discord client already receives. It can't read other people's DMs or servers you're not in.
-- Don't share your config files or the `LurkArchives` folder: they contain your logs.
+- Don't share your config files or the `LurkArchives` and `LurkMedia` folders: they contain your logs and saved media.
 
 ## Disclaimer
 
