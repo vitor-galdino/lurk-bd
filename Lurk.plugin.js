@@ -5671,7 +5671,7 @@ const CSS = `
   --c-muted: var(--text-muted, #949ba4);
   --c-fill: var(--background-secondary, var(--background-base-lower, #2b2d31));
   --c-fill2: var(--background-tertiary, var(--background-base-lowest, #1e1f22));
-  --c-hover: var(--background-modifier-hover, rgba(255,255,255,.05));
+  --c-hover: color-mix(in srgb, var(--c-text) 4%, transparent);
   --c-sep: var(--border-subtle, rgba(255,255,255,.07));
   --c-link: var(--text-link, #00a8fc);
   --c-red: #ff6961; --c-green: #30d158;
@@ -5722,6 +5722,7 @@ const CSS = `
 .dmtt-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 8px 14px; box-sizing: border-box; border: none; background: transparent; color: inherit; text-align: left; font: inherit; }
 button.dmtt-row { cursor: pointer; }
 button.dmtt-row:hover, .dmtt-row[style*="pointer"]:hover { background: var(--c-hover); }
+button.dmtt-row, .dmtt-back, .dmtt-nav-icon, .dmtt-link, .dmtt-more, .dmtt-action, .dmtt-tile-card, .dmtt-filter, .dmtt-close { transition: background-color .15s ease; }
 button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,255,255,.08)); }
 .dmtt-row.is-danger .dmtt-row-title { color: var(--c-red); }
 .dmtt-row-col { flex-direction: column; align-items: stretch; gap: 6px; }
@@ -5788,7 +5789,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-text:focus, .dmtt-stepper input:focus { box-shadow: 0 0 0 2px rgba(10,132,255,.6); }
 .dmtt-search-hit .dmtt-crumb { padding: 8px 14px 0; font-size: 11px; color: var(--c-muted); }
 .dmtt-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 16px; border: none; border-radius: 10px; background: #0071e3; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
-.dmtt-btn-primary:hover { filter: brightness(1.1); }
+.dmtt-btn-primary:hover { filter: brightness(1.05); }
 .dmtt-center { display: flex; justify-content: center; }
 .dmtt-link { align-self: flex-start; border: none; background: none; padding: 6px 4px; margin: -4px 0 -4px -4px; border-radius: 6px; color: var(--c-link); font-size: 13px; font-weight: 500; cursor: pointer; flex: none; }
 .dmtt-link:hover { background: var(--c-hover); }
@@ -5797,7 +5798,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-more:hover { background: var(--c-hover); }
 .dmtt-del { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: none; border: none; border-radius: 50%; background: var(--c-fill2); color: var(--c-muted); cursor: pointer; opacity: 0; transition: opacity .12s; padding: 0; }
 .dmtt-row:hover .dmtt-del, .dmtt-card:hover .dmtt-del, .dmtt-cell:hover .dmtt-del, .dmtt-row:focus-within .dmtt-del, .dmtt-card:focus-within .dmtt-del, .dmtt-del:focus-visible { opacity: 1; }
-.dmtt-del:hover { background: rgba(255,69,58,.18); color: var(--c-red); }
+.dmtt-del:hover { background: rgba(255,69,58,.1); color: var(--c-red); }
 .dmtt-ok { display: inline-flex; align-items: center; flex: none; font-size: 12px; font-weight: 600; color: var(--c-green); }
 .dmtt-tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 6px; background: var(--c-fill2); color: var(--c-text); border: none; white-space: nowrap; flex: none; font-family: inherit; }
 .dmtt-tag.is-red { background: rgba(255,69,58,.16); color: #ff6961; }
@@ -5942,7 +5943,7 @@ button.dmtt-fr > .dmtt-chev { align-self: center; }
 .dmtt-viewer-bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; }
 .dmtt-viewer-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; color: #fff; }
 .dmtt-viewer-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border: none; border-radius: 8px; background: rgba(255,255,255,.1); color: #fff; font-size: 12.5px; cursor: pointer; }
-.dmtt-viewer-btn:hover { background: rgba(255,255,255,.18); }
+.dmtt-viewer-btn:hover { background: rgba(255,255,255,.12); }
 .dmtt-viewer-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 12px 12px; }
 .dmtt-viewer-stage img, .dmtt-viewer-stage video { max-width: 100%; max-height: 100%; border-radius: 8px; background: #000; }
 .dmtt-viewer-wait { color: rgba(255,255,255,.7); font-size: 13px; }
@@ -5950,7 +5951,7 @@ button.dmtt-fr > .dmtt-chev { align-self: center; }
 .dmtt-pc-none { font-size: 12px; color: var(--text-muted); }
 .dmtt-pc-arrow { color: var(--text-muted); }
 .dmtt-frbtn { height: 32px; padding: 0 14px; border-radius: 14px; border: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--c-text, #fff); transition: opacity .15s, filter .15s; }
-.dmtt-frbtn:hover:not(:disabled) { filter: brightness(1.15); }
+.dmtt-frbtn:hover:not(:disabled) { filter: brightness(1.06); }
 .dmtt-frbtn:disabled { opacity: .5; cursor: default; }
 .dmtt-frbtn.is-primary { background: #0071e3; color: #fff; }
 .dmtt-frbtn.is-plain { background: transparent; color: var(--c-link); padding: 0 6px; }
