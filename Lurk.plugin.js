@@ -147,6 +147,41 @@ const RawData = {
   save: (file, key, value) => BdApi.Data.save(file + SUFFIX, key, value),
   delete: (file, key) => BdApi.Data.delete(file + SUFFIX, key),
 };
+const Files = (() => {
+  const fs = () => require("fs");
+  const path = () => require("path");
+  const api = {
+    join: (...parts) => path().join(...parts),
+    inPlugins: (name) => path().join(BdApi.Plugins.folder, name),
+    exists: (p) => { try { return !!p && fs().existsSync(p); } catch { return false; } },
+    stat: (p) => { try { const st = fs().statSync(p); return { size: st.size, at: st.mtimeMs, file: st.isFile(), dir: st.isDirectory() }; } catch { return null; } },
+    list: (p) => { try { return fs().readdirSync(p); } catch { return []; } },
+    mkdir: (p) => { if (!api.exists(p)) fs().mkdirSync(p, { recursive: true }); return p; },
+    move: (from, to) => fs().renameSync(from, to),
+    remove: (p) => { const st = api.stat(p); if (!st) return; if (st.dir) fs().rmSync(p, { recursive: true, force: true }); else fs().unlinkSync(p); },
+    read: (p, text) => new Promise((resolve, reject) => {
+      const done = (err, out) => {
+        if (err) return reject(err);
+        if (!text && typeof out === "string") return reject(new Error("binary read returned text"));
+        resolve(out);
+      };
+      try {
+        const f = fs();
+        if (typeof f.readFile === "function") f.readFile(p, text ? "utf8" : null, done);
+        else done(null, f.readFileSync(p, text ? "utf8" : null));
+      } catch (e) { reject(e); }
+    }),
+    write: (p, content) => new Promise((resolve, reject) => {
+      try {
+        const f = fs();
+        if (typeof f.writeFile === "function") f.writeFile(p, content, (err) => (err ? reject(err) : resolve()));
+        else { f.writeFileSync(p, content); resolve(); }
+      } catch (e) { reject(e); }
+    }),
+    writeSync: (p, content) => fs().writeFileSync(p, content),
+  };
+  return api;
+})();
 const Data = {
   load: (key) => RawData.load(PLUGIN, key),
   save: (key, value) => RawData.save(PLUGIN, key, value),
@@ -362,16 +397,12 @@ async function verifySignature(code, sigText) {
   return false;
 }
 function pluginFilePath() {
-  const path = require("path");
-  const file = safe(() => BdApi.Plugins.get(PLUGIN)?.filename) || "Lurk.plugin.js";
-  return path.join(BdApi.Plugins.folder, file);
+  return Files.inPlugins(safe(() => BdApi.Plugins.get(PLUGIN)?.filename) || "Lurk.plugin.js");
 }
 function installUpdate(code) {
   return new Promise((resolve, reject) => {
     try {
-      const fs = require("fs");
-      if (typeof fs.writeFile === "function") fs.writeFile(pluginFilePath(), code, (err) => (err ? reject(err) : resolve()));
-      else { fs.writeFileSync(pluginFilePath(), code); resolve(); }
+      Files.write(pluginFilePath(), code).then(resolve, reject);
     } catch (e) { reject(e); }
   });
 }
@@ -432,6 +463,26 @@ function createBus() {
     emit() { listeners.forEach((fn) => { try { fn(); } catch (e) { Logger.error(e); } }); },
   };
 }
+const Scheduler = (() => {
+  const tasks = new Map();
+  let timer = null;
+  const run = (fn) => { try { const r = fn(); if (r && typeof r.catch === "function") r.catch(() => {}); } catch {} };
+  const tick = () => {
+    const now = Date.now();
+    for (const t of [...tasks.values()]) {
+      if (now < t.next) continue;
+      if (t.every) t.next = now + t.every; else tasks.delete(t.name);
+      run(t.fn);
+    }
+  };
+  return {
+    every(name, ms, fn, delay = ms) { tasks.set(name, { name, every: ms, fn, next: Date.now() + delay }); },
+    once(name, delay, fn) { tasks.set(name, { name, every: 0, fn, next: Date.now() + delay }); },
+    cancel(name) { tasks.delete(name); },
+    start() { if (!timer) timer = setInterval(tick, 1000); },
+    stop() { clearInterval(timer); timer = null; tasks.clear(); },
+  };
+})();
 const liveBus = createBus();
 const historyBus = createBus();
 const settingsBus = createBus();
@@ -514,7 +565,6 @@ function toggleIgnore(type, id, label) {
   historyBus.emit();
 }
 
-const getSeenAt = () => Data.load(k("seenAt")) || 0;
 const seenBus = createBus();
 const SEEN_LEGACY = { "vipHist:messages": "deletedSeen", "vipHist:profile": "profileSeen" };
 let seenMapCache = null;
@@ -645,35 +695,32 @@ function deleteVipData(userId) {
 
 const MEDIA_DIR = `LurkMedia${SUFFIX}`;
 const mediaBus = createBus();
-const mediaRoot = () => require("path").join(BdApi.Plugins.folder, MEDIA_DIR);
+const mediaRoot = () => Files.inPlugins(MEDIA_DIR);
 const cleanName = (s, max = 40) => String(s || "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, max);
 const userDirName = (uid) => `${cleanName(nameOf(uid, getVipList()[uid] || {})) || "user"} (${uid})`;
 const PROFILE_FILE = /^(avatar|banner)_(current|old)\./;
 function findUserDir(uid, create) {
-  const fs = nodeFs();
-  const path = require("path");
   const root = mediaRoot();
-  if (!fs.existsSync(root)) { if (!create) return null; fs.mkdirSync(root, { recursive: true }); }
+  if (!Files.exists(root)) { if (!create) return null; Files.mkdir(root); }
   const want = userDirName(uid);
-  const found = fs.readdirSync(root).find((n) => n.endsWith(`(${uid})`));
+  const found = Files.list(root).find((n) => n.endsWith(`(${uid})`));
   if (found) {
-    if (found === want) return path.join(root, found);
-    try { fs.renameSync(path.join(root, found), path.join(root, want)); return path.join(root, want); } catch { return path.join(root, found); }
+    if (found === want) return Files.join(root, found);
+    try { Files.move(Files.join(root, found), Files.join(root, want)); return Files.join(root, want); } catch { return Files.join(root, found); }
   }
   if (!create) return null;
-  fs.mkdirSync(path.join(root, want), { recursive: true });
-  return path.join(root, want);
+  return Files.mkdir(Files.join(root, want));
 }
 function mediaFilePath(uid, file) {
   if (!uid || !file) return null;
   const dir = safe(() => findUserDir(uid, false));
   if (!dir) return null;
-  const full = require("path").join(dir, file);
-  return safe(() => nodeFs().existsSync(full)) ? full : null;
+  const full = Files.join(dir, file);
+  return Files.exists(full) ? full : null;
 }
 function deleteUserMedia(uid) {
   const dir = findUserDir(uid, false);
-  if (dir) nodeFs().rmSync(dir, { recursive: true, force: true });
+  if (dir) Files.remove(dir);
   const pm = getProfileMedia();
   if (pm[uid]) { delete pm[uid]; Data.save(k("profileMedia"), pm); }
   mediaBus.emit();
@@ -697,13 +744,6 @@ async function fetchBytes(url, maxBytes) {
   const ab = await res.arrayBuffer();
   if (maxBytes && ab.byteLength > maxBytes) throw new Error("too big");
   return new Uint8Array(ab);
-}
-function writeFileAsync(full, bytes) {
-  return new Promise((resolve, reject) => {
-    const fs = nodeFs();
-    if (typeof fs.writeFile === "function") fs.writeFile(full, bytes, (err) => (err ? reject(err) : resolve()));
-    else { try { fs.writeFileSync(full, bytes); resolve(); } catch (e) { reject(e); } }
-  });
 }
 const mediaQueue = [];
 let mediaBusy = 0;
@@ -737,12 +777,12 @@ function queueMessageMedia(m) {
     queueMedia(async () => {
       const file = `${m.id}_${i}_${cleanName(a.name, 60) || `file.${extOf(a.url) || "bin"}`}`;
       const dir = findUserDir(m.userId, true);
-      const full = require("path").join(dir, file);
-      if (!nodeFs().existsSync(full)) {
+      const full = Files.join(dir, file);
+      if (!Files.exists(full)) {
         let bytes = null;
         for (const u of [a.url, a.proxy].filter(Boolean)) { try { bytes = await fetchBytes(u, maxFileBytes()); break; } catch (e) { if (String(e?.message) === "too big") { a.skipped = "size"; saveVipSoon("messages"); return; } } }
         if (!bytes) return;
-        await writeFileAsync(full, bytes);
+        await Files.write(full, bytes);
       }
       a.local = file;
       saveVipSoon("messages");
@@ -754,17 +794,14 @@ function queueMessageMedia(m) {
 let mediaLimitTimer = null;
 function scheduleMediaLimit() { clearTimeout(mediaLimitTimer); mediaLimitTimer = setTimeout(() => { safe(() => enforceMediaLimit()); safe(() => enforceProfileLimit()); }, 5000); }
 function scanMedia() {
-  const fs = nodeFs();
-  const path = require("path");
   const root = mediaRoot();
   const files = [];
-  if (!fs.existsSync(root)) return files;
-  for (const dir of fs.readdirSync(root)) {
-    const full = path.join(root, dir);
-    let list = [];
-    try { if (!fs.statSync(full).isDirectory()) continue; list = fs.readdirSync(full); } catch { continue; }
-    for (const f of list) {
-      try { const st = fs.statSync(path.join(full, f)); if (st.isFile()) files.push({ path: path.join(full, f), size: st.size, at: st.mtimeMs, profile: PROFILE_FILE.test(f) }); } catch {}
+  for (const dir of Files.list(root)) {
+    const full = Files.join(root, dir);
+    if (!Files.stat(full)?.dir) continue;
+    for (const f of Files.list(full)) {
+      const st = Files.stat(Files.join(full, f));
+      if (st?.file) files.push({ path: Files.join(full, f), size: st.size, at: st.at, profile: PROFILE_FILE.test(f) });
     }
   }
   return files;
@@ -776,7 +813,7 @@ function enforceMediaLimit() {
   let removed = 0;
   for (const f of files) {
     if (total <= max) break;
-    try { nodeFs().unlinkSync(f.path); total -= f.size; removed++; } catch {}
+    try { Files.remove(f.path); total -= f.size; removed++; } catch {}
   }
   if (removed) mediaBus.emit();
 }
@@ -801,26 +838,21 @@ function profileState(pm, uid, field) {
   return st;
 }
 function migrateProfileFiles(uid, field, st, dir) {
-  const fs = nodeFs();
-  const path = require("path");
   for (const e of st.list) {
     if (!e.file || e.file.startsWith(`${PROFILE_SUB}/`)) continue;
-    const from = path.join(dir, e.file);
-    if (!fs.existsSync(from)) { e.file = null; continue; }
-    const at = e.at || safe(() => fs.statSync(from).mtimeMs) || Date.now();
+    const from = Files.join(dir, e.file);
+    if (!Files.exists(from)) { e.file = null; continue; }
+    const at = e.at || Files.stat(from)?.at || Date.now();
     const name = uniqueProfileName(dir, field, at, profileExt(e.hash));
-    try { fs.renameSync(from, path.join(dir, name)); e.file = name; e.at = at; } catch {}
+    try { Files.move(from, Files.join(dir, name)); e.file = name; e.at = at; } catch {}
   }
   st.list = st.list.filter((e) => e.file);
 }
 function uniqueProfileName(dir, field, at, ext) {
-  const fs = nodeFs();
-  const path = require("path");
-  const pdir = path.join(dir, PROFILE_SUB);
-  if (!fs.existsSync(pdir)) fs.mkdirSync(pdir, { recursive: true });
+  const pdir = Files.mkdir(Files.join(dir, PROFILE_SUB));
   const base = `${field} ${fileStamp(at)}`;
   let name = `${base}.${ext}`;
-  for (let i = 2; fs.existsSync(path.join(pdir, name)); i++) name = `${base} (${i}).${ext}`;
+  for (let i = 2; Files.exists(Files.join(pdir, name)); i++) name = `${base} (${i}).${ext}`;
   return `${PROFILE_SUB}/${name}`;
 }
 function syncProfileMedia(uid, field, hash, prevHash) {
@@ -829,15 +861,14 @@ function syncProfileMedia(uid, field, hash, prevHash) {
   const has = (h) => !h || (Array.isArray(known?.list) && known.list.some((e) => e.hash === h && mediaFilePath(uid, e.file)));
   if (has(hash) && (!prevHash || prevHash === hash || has(prevHash))) return;
   queueMedia(async () => {
-    const path = require("path");
     const pm = getProfileMedia();
     const st = profileState(pm, uid, field);
     const dir = findUserDir(uid, true);
     migrateProfileFiles(uid, field, st, dir);
-    const exists = (h) => st.list.some((e) => e.hash === h && nodeFs().existsSync(path.join(dir, e.file)));
+    const exists = (h) => st.list.some((e) => e.hash === h && Files.exists(Files.join(dir, e.file)));
     const grab = async (h, at) => {
       const name = uniqueProfileName(dir, field, at, profileExt(h));
-      await writeFileAsync(path.join(dir, name), await fetchBytes(profileCdn(uid, field, h, field === "banner" ? 1024 : 512), maxFileBytes()));
+      await Files.write(Files.join(dir, name), await fetchBytes(profileCdn(uid, field, h, field === "banner" ? 1024 : 512), maxFileBytes()));
       st.list = st.list.filter((e) => e.hash !== h);
       st.list.push({ hash: h, file: name, at });
     };
@@ -866,18 +897,15 @@ function migrateAllProfileMedia() {
   if (changed) { Data.save(k("profileMedia"), pm); mediaBus.emit(); }
 }
 function scanProfileMedia() {
-  const fs = nodeFs();
-  const path = require("path");
   const root = mediaRoot();
   const files = [];
-  if (!fs.existsSync(root)) return files;
-  for (const dir of fs.readdirSync(root)) {
-    const pdir = path.join(root, dir, PROFILE_SUB);
-    let list = [];
-    try { if (!fs.existsSync(pdir) || !fs.statSync(pdir).isDirectory()) continue; list = fs.readdirSync(pdir); } catch { continue; }
+  for (const dir of Files.list(root)) {
+    const pdir = Files.join(root, dir, PROFILE_SUB);
+    if (!Files.stat(pdir)?.dir) continue;
     const uid = dir.match(/\((\d+|[^()]+)\)$/)?.[1] || null;
-    for (const f of list) {
-      try { const st = fs.statSync(path.join(pdir, f)); if (st.isFile()) files.push({ uid, rel: `${PROFILE_SUB}/${f}`, path: path.join(pdir, f), size: st.size, at: st.mtimeMs }); } catch {}
+    for (const f of Files.list(pdir)) {
+      const st = Files.stat(Files.join(pdir, f));
+      if (st?.file) files.push({ uid, rel: `${PROFILE_SUB}/${f}`, path: Files.join(pdir, f), size: st.size, at: st.at });
     }
   }
   return files;
@@ -899,7 +927,7 @@ function enforceProfileLimit() {
   let removed = 0;
   for (const f of files.filter((x) => !keep.has(`${x.uid}|${x.rel}`)).sort((a, b) => a.at - b.at)) {
     if (total <= max) break;
-    try { nodeFs().unlinkSync(f.path); total -= f.size; removed++; } catch {}
+    try { Files.remove(f.path); total -= f.size; removed++; } catch {}
   }
   if (removed) {
     for (const uid of Object.keys(pm)) for (const field of Object.keys(pm[uid] || {})) {
@@ -924,14 +952,11 @@ function useLocalUrl(full, active = true) {
     if (!full || !active) return undefined;
     let alive = true;
     let made = null;
-    const fs = nodeFs();
-    const done = (err, buf) => {
+    Files.read(full).then((buf) => {
       if (!alive) return;
-      if (err || !buf || typeof buf === "string") { setUrl(false); return; }
       made = URL.createObjectURL(new Blob([buf], { type: MIME[extOf(full)] || "application/octet-stream" }));
       setUrl(made);
-    };
-    try { if (typeof fs.readFile === "function") fs.readFile(full, null, done); else done(null, fs.readFileSync(full, null)); } catch { setUrl(false); }
+    }, () => { if (alive) setUrl(false); });
     return () => { alive = false; if (made) URL.revokeObjectURL(made); };
   }, [full, active]);
   return url;
@@ -959,7 +984,7 @@ function MediaFolderRow() {
   const [tick, setTick] = React.useState(0);
   React.useEffect(() => mediaBus.sub(() => setTick((t) => t + 1)), []);
   React.useEffect(() => { const t = setTimeout(() => setUsed(safe(() => mediaUsage()) || 0), 50); return () => clearTimeout(t); }, [tick]);
-  const open = () => { safe(() => { const fs = nodeFs(); if (!fs.existsSync(mediaRoot())) fs.mkdirSync(mediaRoot(), { recursive: true }); }); showInFolder(mediaRoot()); };
+  const open = () => { safe(() => Files.mkdir(mediaRoot())); showInFolder(mediaRoot()); };
   return h("button", { className: "dmtt-row", onClick: open },
     h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Abrir pasta LurkMedia", "Open LurkMedia folder"))),
     h("span", { className: "dmtt-row-detail" }, used == null ? "…" : used ? fmtBytes(used) : L("Vazia", "Empty")),
@@ -1029,21 +1054,18 @@ const ARCHIVE_DIR = `LurkArchives${SUFFIX}`;
 const archiveBus = createBus();
 const getArchives = () => (Data.load(k("archives")) || []).filter((a) => a?.file);
 function saveArchives(list) { Data.save(k("archives"), list); archiveBus.emit(); }
-const nodeFs = () => require("fs");
-const archiveDir = () => require("path").join(BdApi.Plugins.folder, ARCHIVE_DIR);
-const archivePath = (file) => require("path").join(archiveDir(), file);
+const archiveDir = () => Files.inPlugins(ARCHIVE_DIR);
+const archivePath = (file) => Files.join(archiveDir(), file);
 const isoDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 function writeArchive(messages) {
-  const fs = nodeFs();
-  const dir = archiveDir();
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+  Files.mkdir(archiveDir());
   const times = messages.map((m) => m.createdAt || 0);
   const from = Math.min(...times), to = Math.max(...times);
   const base = `messages_${isoDay(from)}_${isoDay(to)}`;
   let file = `${base}.json`;
-  for (let i = 2; fs.existsSync(archivePath(file)); i++) file = `${base}_${i}.json`;
+  for (let i = 2; Files.exists(archivePath(file)); i++) file = `${base}_${i}.json`;
   const text = JSON.stringify({ format: "Lurk-archive", v: 1, plugin: VERSION, account: myId(), from, to, count: messages.length, messages });
-  fs.writeFileSync(archivePath(file), text);
+  Files.writeSync(archivePath(file), text);
   saveArchives([{ file, from, to, count: messages.length, bytes: text.length, at: Date.now() }, ...getArchives()]);
 }
 function enforceMessageLimit() {
@@ -1061,17 +1083,10 @@ function enforceMessageLimit() {
   if (changed) saveVipSoon("messages");
 }
 function readArchive(entry) {
-  return new Promise((resolve, reject) => {
-    const parse = (text) => { try { resolve(JSON.parse(text).messages || []); } catch (e) { reject(e); } };
-    try {
-      const fs = nodeFs();
-      if (typeof fs.readFile === "function") fs.readFile(archivePath(entry.file), "utf8", (err, text) => (err ? reject(err) : parse(text)));
-      else setTimeout(() => { try { parse(fs.readFileSync(archivePath(entry.file), "utf8")); } catch (e) { reject(e); } }, 0);
-    } catch (e) { reject(e); }
-  });
+  return Files.read(archivePath(entry.file), true).then((text) => JSON.parse(text).messages || []);
 }
 function deleteArchive(entry) {
-  try { const f = archivePath(entry.file); if (nodeFs().existsSync(f)) nodeFs().unlinkSync(f); } catch (e) { Logger.error("archive delete", e); }
+  try { Files.remove(archivePath(entry.file)); } catch (e) { Logger.error("archive delete", e); }
   saveArchives(getArchives().filter((a) => a.file !== entry.file));
 }
 const fmtBytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
@@ -1326,7 +1341,6 @@ function currentStatus(id, isFriend) {
   if (st !== "offline") return st;
   return isFriend ?? isFriendOf(id) ? "offline" : null;
 }
-const lastPresence = (r) => { const a = attemptsOf(r); const x = a[a.length - 1]; return x?.presenceEnd || x?.presence || null; };
 const recordInvisible = (r) => attemptsOf(r).some((a) => effectiveStatus(a.presence, r.isFriend) === "invisible" || effectiveStatus(a.presenceEnd, r.isFriend) === "invisible");
 
 const SOUND_FILE = "LurkSound";
@@ -2703,8 +2717,8 @@ function seedFreq() {
   }
   flushFreq();
 }
-function freqMatrix(id) {
-  const u = getFreq()[id] || {};
+const freqMatrix = (id) => matrixOf(getFreq()[id] || {});
+function matrixOf(u) {
   const weeks = Object.keys(u);
   const sum = new Array(168).fill(0);
   for (const wk of weeks) u[wk].forEach((v, i) => { sum[i] += v; });
@@ -2718,10 +2732,23 @@ function bestWindow(hours, len) {
 }
 const median = (arr) => { const a = [...arr].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
 function routineOf(id) {
-  const now = Date.now();
-  const u = getFreq()[id] || {};
+  const since = Date.now() - FREQ_WEEKS * 7 * DAY;
   const x = getFreqX();
-  const { sum, weeks, total } = freqMatrix(id);
+  return computeRoutine({
+    now: Date.now(),
+    weeks: getFreq()[id] || {},
+    cov: x.cov,
+    dev: x.dev[id] || {},
+    talkTimes: [
+      ...loadVip().messages.filter((m) => m.userId === id && (m.createdAt || 0) >= since).map((m) => m.createdAt),
+      ...getHistory().filter((r) => r.userId === id && (r.startedAt || 0) >= since).map((r) => r.startedAt),
+    ],
+    presence: loadVip().events.filter((e) => e.userId === id && e.type === "presence" && e.at >= since),
+  });
+}
+function computeRoutine({ now, weeks: u, cov, dev, talkTimes, presence }) {
+  const x = { cov };
+  const { sum, weeks, total } = matrixOf(u);
   const hours = hourSums(sum);
   const daysTot = Array.from({ length: 7 }, (_, d) => sum.slice(d * 24, d * 24 + 24).reduce((a, b) => a + b, 0));
   let coveredDays = 0;
@@ -2746,12 +2773,10 @@ function routineOf(id) {
   const covH = hourSums(covSum); const onH = hourSums(onWithCov);
   const chance = covH.map((c, i) => (c >= 20 ? Math.min(1, onH[i] / c) : null));
   const talk = new Array(24).fill(0);
-  const since = now - FREQ_WEEKS * 7 * DAY;
-  for (const m of loadVip().messages) if (m.userId === id && (m.createdAt || 0) >= since) talk[new Date(m.createdAt).getHours()]++;
-  for (const r of getHistory()) if (r.userId === id && (r.startedAt || 0) >= since) talk[new Date(r.startedAt).getHours()]++;
+  for (const t of talkTimes) talk[new Date(t).getHours()]++;
   const devP = new Array(24).fill(0); const devM = new Array(24).fill(0);
-  for (const w of Object.values(x.dev[id] || {})) { w.p.forEach((v, i) => { devP[i % 24] += v; }); w.m.forEach((v, i) => { devM[i % 24] += v; }); }
-  const pres = loadVip().events.filter((e) => e.userId === id && e.type === "presence" && e.at >= since).sort((a, b) => a.at - b.at);
+  for (const w of Object.values(dev)) { w.p.forEach((v, i) => { devP[i % 24] += v; }); w.m.forEach((v, i) => { devM[i % 24] += v; }); }
+  const pres = [...presence].sort((a, b) => a.at - b.at);
   const sessions = [];
   for (const e of pres) {
     const online = e.to && e.to !== "offline";
@@ -2781,8 +2806,6 @@ function addProfileEvents(evs) {
   profileBus.emit();
   safe(() => updateSnipeBadge());
 }
-const getProfileSeen = () => seenOf("vipHist:profile");
-const markProfileSeen = () => markSeenKeys(["vipHist:profile"]);
 const unseenProfile = (seen, userId) => getProfileLog().filter((e) => e.at > seen && isVip(e.userId) && (!userId || e.userId === userId)).length;
 const newProfileCount = () => unseenProfile(seenOf("vipHist:profile"));
 const getIdentitySnap = () => Data.load(k("vipIdentity")) || {};
@@ -2977,8 +3000,6 @@ function callTotals() {
 }
 
 const snipeBus = vipBus;
-const getDeletedSeen = () => seenOf("vipHist:messages");
-function markDeletedSeen() { markSeenKeys(["vipHist:messages"]); }
 const activityAt = (m) => Math.max(lastChangeAtSafe(m), m.createdAt || 0);
 function lastChangeAtSafe(m) { return Math.max(m.deletedAt || 0, m.edits?.length ? m.edits[m.edits.length - 1].at : 0); }
 function vipFeedItems() {
@@ -3199,8 +3220,6 @@ const ICON_BACK = "M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l
 const ICON_X = "M17.3 18.7a1 1 0 0 0 1.4-1.4L13.42 12l5.3-5.3a1 1 0 0 0-1.42-1.4L12 10.58l-5.3-5.3a1 1 0 0 0-1.4 1.42L10.58 12l-5.3 5.3a1 1 0 1 0 1.42 1.4L12 13.42l5.3 5.3Z";
 const ICON_CHECK = "M20.7 6.3a1 1 0 0 1 0 1.4l-10 10a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.4l4.3 4.29 9.3-9.3a1 1 0 0 1 1.4 0Z";
 
-const ICON_STAR_FILL = "M10.81 2.86c.38-1.15 2-1.15 2.38 0l1.89 5.83h6.12c1.2 0 1.71 1.54.73 2.25l-4.95 3.6 1.9 5.82c.37 1.15-.94 2.1-1.93 1.4L12 18.16l-4.95 3.6c-.98.7-2.3-.25-1.92-1.4l1.89-5.82-4.95-3.6c-.98-.71-.48-2.25.73-2.25h6.12l1.9-5.83Z";
-const ICON_KEYBOARD = "M20 5a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3zM6 13a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V14a1 1 0 0 0-1-1m12 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V14a1 1 0 0 0-1-1m-7.998 0a1 1 0 0 0-.004 2l4 .01a1 1 0 0 0 .005-2zM6 9a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1m4 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1m4 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1m4 0a1 1 0 0 0-1 1v.01a1 1 0 0 0 2 0V10a1 1 0 0 0-1-1";
 
 const SI = {
   keyboard: "M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8",
@@ -3528,7 +3547,6 @@ function ScreenRouter({ s }) {
   }
 }
 
-let lastSeenBeforeOpen = 0;
 function counts() {
   const today = startOfDay(Date.now());
   const hist = getHistory();
@@ -5654,35 +5672,33 @@ module.exports = class Lurk {
     SelectedChannelStore?.addChangeListener?.(this.onChannelSelect);
     this.onSettings = settingsBus.sub(() => { safe(() => syncDOM()); safe(() => updateFriendsBadge()); });
     this.onFriends = friendsBus.sub(() => safe(() => updateFriendsBadge()));
-    this.friendsTimer = setTimeout(() => safe(() => initFriends()), 8000);
+    Scheduler.start();
+    Scheduler.once("friends", 8000, () => initFriends());
     UserStore?.addChangeListener?.(onUserStoreChange);
     diag.modules = { restAPI: RestAPI ? (RestAPI.getAPIBaseURL ? "baseurl" : "http") : null, profileActions: ProfileActions ? ProfileActions.via || "props" : null, profileModal: UserProfileModal ? UserProfileModal.via || "props" : null, relationshipActions: !!RelationshipActions, userProfileStore: !!UserProfileStore };
     saveDiag();
-    this.identityTimer = setTimeout(() => safe(() => checkIdentities(true)), 10000);
-    this.watchInterval = setInterval(() => safe(() => checkWatchedProfile()), 15 * 60000);
+    Scheduler.once("identities", 10000, () => checkIdentities(true));
+    Scheduler.every("watchProfile", 15 * 60000, () => checkWatchedProfile(), 20000);
     freqCache = null;
     safe(() => { pruneFreq(); seedFreq(); });
     this.onKey = (e) => safe(() => onDiscreetKey(e));
     document.addEventListener("keydown", this.onKey, true);
     safe(() => checkMyStream());
-    this.streamInterval = setInterval(() => safe(() => checkMyStream()), 3000);
-    this.freqInterval = setInterval(() => safe(() => { sampleFreq(); }), 60000);
-    this.freqFlush = setInterval(() => safe(() => { pruneFreq(); flushFreq(); }), 5 * 60000);
-    this.watchTimer = setTimeout(() => safe(() => checkWatchedProfile()), 20000);
+    Scheduler.every("myStream", 3000, () => checkMyStream());
+    Scheduler.every("freqSample", 60000, () => sampleFreq());
+    Scheduler.every("freqFlush", 5 * 60000, () => { pruneFreq(); flushFreq(); });
     safe(() => migrateServerTyping());
     scheduleSubscribe();
-    this.subInterval = setInterval(subscribeVipGuilds, 120000);
-    this.backupTimer = setTimeout(() => safe(() => runBackup(false)), 30000);
-    this.mediaTimer = setTimeout(() => { safe(() => migrateAllProfileMedia()); safe(() => enforceMediaLimit()); safe(() => enforceProfileLimit()); }, 60000);
-    this.backupInterval = setInterval(() => safe(() => runBackup(false)), 6 * 3600000);
+    Scheduler.every("subscribe", 120000, () => subscribeVipGuilds());
+    Scheduler.every("backup", 6 * 3600000, () => runBackup(false), 30000);
+    Scheduler.once("mediaUpkeep", 60000, () => { safe(() => migrateAllProfileMedia()); safe(() => enforceMediaLimit()); safe(() => enforceProfileLimit()); });
     safe(() => initPendingReqs());
     patchRelationshipActions();
     this.patchContextMenus();
     startDOM();
     safe(() => afterUpdateCheck());
-    this.updateTimer = setTimeout(() => checkForUpdate(false), 20000);
-    this.updateInterval = setInterval(() => checkForUpdate(false), 6 * 3600000);
-    this.seenInterval = setInterval(() => safe(() => placeLastSeen()), 30000);
+    Scheduler.every("update", 6 * 3600000, () => checkForUpdate(false), 20000);
+    Scheduler.every("lastSeen", 30000, () => placeLastSeen());
   }
 
   patchContextMenus() {
@@ -5735,11 +5751,10 @@ module.exports = class Lurk {
     try { SelectedChannelStore?.removeChangeListener?.(this.onChannelSelect); } catch {}
     try { this.onSettings?.(); } catch {}
     try { this.onFriends?.(); } catch {}
-    clearTimeout(this.friendsTimer);
     try { UserStore?.removeChangeListener?.(onUserStoreChange); } catch {}
-    clearTimeout(this.identityTimer); clearTimeout(this.watchTimer); clearInterval(this.watchInterval);
-    clearInterval(this.freqInterval); clearInterval(this.freqFlush); safe(() => flushFreq());
-    document.removeEventListener("keydown", this.onKey, true); clearInterval(this.streamInterval); recordingShortcut = null;
+    Scheduler.stop();
+    safe(() => flushFreq());
+    document.removeEventListener("keydown", this.onKey, true); recordingShortcut = null;
     clearTimeout(identityTimer); identityTimer = null;
     snipeActive = false;
     if (window.__dmttSnipeHook === snipeInterceptor) window.__dmttSnipeHook = null;
@@ -5749,13 +5764,7 @@ module.exports = class Lurk {
     pendingSent.clear();
     for (const id of [...vipVoice.keys()]) safe(() => closeVoice(id, true));
     safe(() => endMyCall(true));
-    clearTimeout(this.backupTimer);
-    clearTimeout(this.mediaTimer); clearTimeout(mediaLimitTimer); mediaQueue.length = 0; closeViewer();
-    clearInterval(this.backupInterval);
-    clearInterval(this.subInterval);
-    clearTimeout(this.updateTimer);
-    clearInterval(this.updateInterval);
-    clearInterval(this.seenInterval);
+    clearTimeout(mediaLimitTimer); mediaQueue.length = 0; closeViewer();
     safe(() => updater.notice?.()); updater.notice = null;
     flushVip();
     flushMentions();
