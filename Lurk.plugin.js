@@ -57,6 +57,10 @@ const CHANGELOG = [
     ["new", "Lista VIP: avisos de fora do normal quando o VIP fica online numa hora em que quase nunca fica, ou fica online bem mais tempo que o normal. Liga e desliga por VIP em \"Avisar quando\".", "VIP list: out-of-the-ordinary alerts when a VIP comes online at a time they almost never are, or stays online far longer than usual. Turn them on or off per VIP under \"Notify me when\"."],
     ["new", "Perfil do VIP: uma linha com o que esperar agora, como \"costuma sair por volta das 0h30\" ou \"provável voltar por volta das 19h\".", "VIP page: a line on what to expect right now, like \"usually leaves around 0:30\" or \"likely back around 19:00\"."],
     ["new", "Rotina: quanto tempo o VIP e você costumam levar para responder no privado, e quanto tempo vocês ficam online juntos.", "Routine: how long the VIP and you usually take to reply in DMs, and how long you're online together."],
+    ["improved", "Perfil do VIP mais enxuto: os botões agora são Mensagem, Rotina, Galeria e Notas, \"Monitorar perfil\" foi para dentro de \"Avisar quando\" e \"Remover da Lista VIP\" foi para o fim da página.", "Leaner VIP page: the buttons are now Message, Routine, Gallery and Notes, \"Watch profile\" moved into \"Notify me when\" and \"Remove from VIP list\" moved to the bottom of the page."],
+    ["improved", "Filtros viraram etiquetas que nunca ficam cortadas, e quando uma aba com novidade está escondida aparece um aviso na borda.", "Filters are now chips that never get cut off, and a hidden tab with something new shows a dot at the edge."],
+    ["improved", "Tela inicial: os cards deixam claro que contam o dia de hoje, e o de mensagens apagadas abre direto nas apagadas do Histórico VIP.", "Home: the cards make it clear they count today, and the deleted messages card opens straight to deleted messages in VIP history."],
+    ["improved", "Dá para usar o Lurk pelo teclado com indicação de foco, as abas mudam com as setas, e números, botões e o mapa da Rotina ficaram mais legíveis.", "Lurk now works by keyboard with a visible focus ring, tabs switch with the arrow keys, and numbers, buttons and the Routine map are easier to read."],
 
     ["fixed", "Fotos de perfil, banners e fotos e vídeos salvos dos VIPs apareciam como \"?\" ou não abriam, mesmo estando salvos na pasta LurkMedia. Agora aparecem normalmente.", "VIPs' saved avatars, banners, photos and videos showed up as \"?\" or wouldn't open, even though they were saved in the LurkMedia folder. They show up normally now."],
   ] },
@@ -1252,7 +1256,13 @@ function jumpTo(guildId, channelId, messageId) {
 const pad = (n) => String(n).padStart(2, "0");
 const fmtTime = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const fmtHM = (ms) => fmtTime(ms).slice(0, 5);
-const fmtDM = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}${d.getFullYear() !== new Date().getFullYear() ? `/${d.getFullYear()}` : ""} ${fmtHM(ms)}`; };
+const fmtDM = (ms) => {
+  const d = new Date(ms);
+  const day = startOfDay(ms), today = startOfDay(Date.now());
+  if (day === today) return L(`hoje ${fmtHM(ms)}`, `today ${fmtHM(ms)}`);
+  if (day === today - DAY) return L(`ontem ${fmtHM(ms)}`, `yesterday ${fmtHM(ms)}`);
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}${d.getFullYear() !== new Date().getFullYear() ? `/${d.getFullYear()}` : ""} ${fmtHM(ms)}`;
+};
 const fmtDateOnly = (ms) => { const d = new Date(ms); return L(`${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`, `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()}`); };
 const fmtDate = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${fmtTime(ms)}`; };
 function fmtSecs(ms) {
@@ -3481,11 +3491,49 @@ function Segmented({ value, onChange, options }) {
     }
     measure();
   });
-  return h("div", { ref, className: `dmtt-seg ${edge}`, role: "tablist", onScroll: measure },
-    options.map(([v, label, n, alert]) => h("button", {
-      key: v, role: "tab", "aria-selected": value === v,
-      className: `dmtt-seg-btn ${value === v ? "is-on" : ""}`, onClick: () => onChange(v),
-    }, label, n ? h("span", { className: `dmtt-seg-n ${alert ? "is-alert" : ""}` }, n) : null)));
+  const [hiddenAlert, setHiddenAlert] = React.useState("");
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const check = () => {
+      let l = false, r = false;
+      for (const b of el.querySelectorAll(".dmtt-seg-btn")) {
+        if (!b.querySelector(".dmtt-seg-n.is-alert")) continue;
+        if (b.offsetLeft < el.scrollLeft - 2) l = true;
+        if (b.offsetLeft + b.offsetWidth > el.scrollLeft + el.clientWidth + 2) r = true;
+      }
+      const next = `${l ? "l" : ""}${r ? "r" : ""}`;
+      setHiddenAlert((cur) => (cur === next ? cur : next));
+    };
+    check();
+    el.addEventListener("scroll", check);
+    return () => el.removeEventListener("scroll", check);
+  });
+  const onKey = (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const i = options.findIndex(([v]) => v === value);
+    const next = options[(i + (e.key === "ArrowRight" ? 1 : options.length - 1)) % options.length];
+    if (!next) return;
+    e.preventDefault();
+    onChange(next[0]);
+    requestAnimationFrame(() => ref.current?.querySelector(".dmtt-seg-btn.is-on")?.focus());
+  };
+  return h("div", { className: "dmtt-seg-wrap" },
+    h("div", { ref, className: `dmtt-seg ${edge}`, role: "tablist", onScroll: measure, onKeyDown: onKey },
+      options.map(([v, label, n, alert]) => h("button", {
+        key: v, role: "tab", "aria-selected": value === v, tabIndex: value === v ? 0 : -1,
+        "aria-label": n && typeof label === "string" ? `${label} (${n}${alert ? L(" novos", " new") : ""})` : undefined,
+        className: `dmtt-seg-btn ${value === v ? "is-on" : ""}`, onClick: () => onChange(v),
+      }, label, n ? h("span", { className: `dmtt-seg-n ${alert ? "is-alert" : ""}`, "aria-hidden": "true" }, n) : null))),
+    hiddenAlert.includes("l") ? h("span", { className: "dmtt-seg-alert is-left", "aria-hidden": "true" }) : null,
+    hiddenAlert.includes("r") ? h("span", { className: "dmtt-seg-alert is-right", "aria-hidden": "true" }) : null);
+}
+function Chips({ value, onChange, options, label }) {
+  return h("div", { className: "dmtt-chipbar", role: "radiogroup", "aria-label": label },
+    options.map(([v, text, n, alert]) => h("button", {
+      key: v, role: "radio", "aria-checked": value === v,
+      className: `dmtt-filter ${value === v ? "is-on" : ""}`, onClick: () => onChange(v),
+    }, text, n ? h("span", { className: `dmtt-filter-n ${alert ? "is-alert" : ""}` }, n) : null)));
 }
 function Search({ value, onChange, placeholder }) {
   return h("label", { className: "dmtt-search" },
@@ -3519,14 +3567,14 @@ function NavRow({ icon, color, avatar, title, subtitle, detail, badge, onClick, 
 function Switch({ checked, onChange, label }) {
   return h("button", { role: "switch", "aria-checked": !!checked, "aria-label": label, className: `dmtt-switch ${checked ? "is-on" : ""}`, onClick: (e) => { e.stopPropagation(); onChange(!checked); } }, h("span", { className: "dmtt-switch-knob" }));
 }
-function Stepper({ value, onChange, min = 0, max = 9999, step = 1, unit }) {
+function Stepper({ value, onChange, min = 0, max = 9999, step = 1, unit, label }) {
   const [draft, setDraft] = React.useState(String(value));
   React.useEffect(() => setDraft(String(value)), [value]);
   const clamp = (n) => Math.max(min, Math.min(max, Number.isFinite(n) ? n : min));
   const commit = (n) => { const v = clamp(n); setDraft(String(v)); if (v !== value) onChange(v); };
   return h("span", { className: "dmtt-stepper" },
     h("button", { className: "dmtt-step-btn", onClick: () => commit(Number(value) - step), disabled: value <= min, "aria-label": L("Diminuir", "Decrease") }, "−"),
-    h("input", { value: draft, inputMode: "numeric", onChange: (e) => setDraft(e.target.value.replace(/[^0-9]/g, "")), onBlur: () => commit(parseInt(draft, 10)), onKeyDown: (e) => { if (e.key === "Enter") e.target.blur(); } }),
+    h("input", { value: draft, inputMode: "numeric", "aria-label": label, onChange: (e) => setDraft(e.target.value.replace(/[^0-9]/g, "")), onBlur: () => commit(parseInt(draft, 10)), onKeyDown: (e) => { if (e.key === "Enter") e.target.blur(); } }),
     unit ? h("span", { className: "dmtt-step-unit" }, unit) : null,
     h("button", { className: "dmtt-step-btn", onClick: () => commit(Number(value) + step), disabled: value >= max, "aria-label": L("Aumentar", "Increase") }, "+"));
 }
@@ -3543,7 +3591,7 @@ function SettingRow({ item }) {
       h("input", { className: "dmtt-text", defaultValue: value || "", placeholder: txt(item.placeholder) || "", onBlur: (e) => set(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") e.target.blur(); } }),
       item.note ? h("span", { className: "dmtt-row-sub" }, txt(item.note)) : null);
   }
-  const control = item.type === "number" ? h(Stepper, { value: Number(value) || 0, onChange: set, min: item.min, max: item.max, step: item.step, unit: item.unit })
+  const control = item.type === "number" ? h(Stepper, { value: Number(value) || 0, onChange: set, min: item.min, max: item.max, step: item.step, unit: item.unit, label: txt(item.label) })
     : item.type === "select" ? h("select", { className: "dmtt-select", value, onChange: (e) => set(e.target.value) }, (typeof item.options === "function" ? item.options() : item.options).map(([v, l]) => h("option", { key: v, value: v }, txt(l))))
     : h(Switch, { checked: !!value, onChange: set, label: txt(item.label) });
   return h("div", { className: "dmtt-row", onClick: item.type === "switch" || !item.type ? () => set(!value) : undefined, style: { cursor: item.type === "switch" || !item.type ? "pointer" : "default" } },
@@ -3753,12 +3801,10 @@ function HomeScreen() {
   const c = counts();
   const top = callTotals()[0];
   const tiles = [
-    [c.quitToday, L(plural(c.quitToday, "digitou e apagou", "digitaram e apagaram"), plural(c.quitToday, "typed & quit", "typed & quit")), "#0a84ff", { type: "typing" }],
-    [c.ghostsToday, plural(c.ghostsToday, "ghost ping", "ghost pings"), "#ff9f0a", { type: "mentions" }],
-    c.vips ? [`${c.vipOnline}/${c.vips}`, c.vipInCall ? L(`VIP online · ${c.vipInCall} em call`, `VIPs online · ${c.vipInCall} in a call`) : L("VIP online", "VIPs online"), "#ffd60a", { type: "vip" }]
-      : [c.contacts, L(plural(c.contacts, "novo contato", "novos contatos"), plural(c.contacts, "new contact", "new contacts")), "#30d158", { type: "contacts" }],
-    c.vips ? [c.vipDeletedToday, L(plural(c.vipDeletedToday, "mensagem VIP apagada", "mensagens VIP apagadas"), plural(c.vipDeletedToday, "VIP message deleted", "VIP messages deleted")), "#ff453a", { type: "vip" }]
-      : [c.mentions, L(plural(c.mentions, "menção registrada", "menções registradas"), plural(c.mentions, "mention logged", "mentions logged")), "#ff453a", { type: "mentions" }],
+    [c.quitToday, L(`${plural(c.quitToday, "digitou e apagou", "digitaram e apagaram")} hoje`, "typed & quit today"), "#0a84ff", { type: "typing" }],
+    [c.ghostsToday, L(`${plural(c.ghostsToday, "ghost ping", "ghost pings")} hoje`, `${plural(c.ghostsToday, "ghost ping", "ghost pings")} today`), "#ff9f0a", { type: "mentions" }],
+    [c.vips ? `${c.vipOnline}/${c.vips}` : 0, c.vips ? (c.vipInCall ? L(`VIP online agora · ${c.vipInCall} em call`, `VIPs online now · ${c.vipInCall} in a call`) : L("VIP online agora", "VIPs online now")) : L("VIPs na sua lista", "VIPs on your list"), "#ffd60a", { type: "vip" }],
+    [c.vipDeletedToday, L(`${plural(c.vipDeletedToday, "mensagem VIP apagada", "mensagens VIP apagadas")} hoje`, `${plural(c.vipDeletedToday, "VIP message deleted", "VIP messages deleted")} today`), "#ff453a", { type: "snipe", tab: "messages", _kind: "deleted", _where: "all" }],
   ];
   return h(React.Fragment, null,
     h(LargeTitle, { title: NAMES.home(), subtitle: new Date().toLocaleDateString(dateLocale(), { weekday: "long", day: "numeric", month: "long" }) }),
@@ -3766,10 +3812,10 @@ function HomeScreen() {
       h("span", { className: "dmtt-tile-dot", style: { background: color } }),
       h("b", null, v), h("span", null, l)))),
     h(Group, { header: L("Atividade", "Activity") },
-      h(NavRow, { icon: "keyboard", color: "#0a84ff", title: NAMES.typing(), subtitle: L("Quem digitou pra você e não enviou", "Who typed to you and didn't send"), detail: c.typingPeople || null, badge: c.typingNew, onClick: () => nav.push({ type: "typing" }) }),
-      h(NavRow, { icon: "at", color: "#ff9f0a", title: NAMES.mentions(), subtitle: L("Ghost pings, respostas apagadas, palavras-chave e reações", "Ghost pings, deleted replies, keywords and reactions"), detail: c.mentions || null, badge: c.mentionsNew, onClick: () => nav.push({ type: "mentions" }) }),
-      h(NavRow, { icon: "userPlus", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou pela primeira vez e pedidos cancelados", "First-time typers and canceled friend requests"), detail: c.contacts || null, badge: c.contactsNew, onClick: () => nav.push({ type: "contacts" }) }),
-      h(NavRow, { icon: "clock", color: "#ff453a", title: NAMES.snipe(), subtitle: L("Mensagens apagadas e editadas, status e tempo online dos VIPs", "VIPs' deleted & edited messages, status and time online"), detail: c.changes || null, badge: c.changesNew, onClick: () => nav.push({ type: "snipe", channelId: SelectedChannelStore?.getChannelId?.() || null }) })),
+      h(NavRow, { icon: "keyboard", color: "#0a84ff", title: NAMES.typing(), subtitle: L("Quem digitou pra você e não enviou", "Who typed to you and didn't send"), badge: c.typingNew, onClick: () => nav.push({ type: "typing" }) }),
+      h(NavRow, { icon: "at", color: "#ff9f0a", title: NAMES.mentions(), subtitle: L("Ghost pings, respostas apagadas, palavras-chave e reações", "Ghost pings, deleted replies, keywords and reactions"), badge: c.mentionsNew, onClick: () => nav.push({ type: "mentions" }) }),
+      h(NavRow, { icon: "userPlus", color: "#30d158", title: NAMES.contacts(), subtitle: L("Quem digitou pela primeira vez e pedidos cancelados", "First-time typers and canceled friend requests"), badge: c.contactsNew, onClick: () => nav.push({ type: "contacts" }) }),
+      h(NavRow, { icon: "clock", color: "#ff453a", title: NAMES.snipe(), subtitle: L("Mensagens apagadas e editadas, status e tempo online dos VIPs", "VIPs' deleted & edited messages, status and time online"), badge: c.changesNew, onClick: () => nav.push({ type: "snipe", channelId: SelectedChannelStore?.getChannelId?.() || null }) })),
     h(Group, { header: L("Pessoas", "People") },
       h(NavRow, { icon: "star", color: "#ffcc00", title: NAMES.vip(), subtitle: c.vips ? L(`${c.vipOnline} de ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} em call` : ""}`, `${c.vipOnline} of ${c.vips} online${c.vipInCall ? ` · ${c.vipInCall} in a call` : ""}`) : L("Acompanhe pessoas específicas", "Keep an eye on specific people"), onClick: () => nav.push({ type: "vip" }) }),
       h(NavRow, { icon: "headset", color: "#bf5af2", title: NAMES.calls(), subtitle: myCall.sess ? L(`Em call agora · ${placeLabel(myCall.sess)}`, `In a call now · ${placeLabel(myCall.sess)}`) : top ? L(`Mais tempo com ${top.name} (${fmtDur(top.ms)})`, `Most time with ${top.name} (${fmtDur(top.ms)})`) : L("Com quem você mais fica em call", "Who you spend the most time with in calls"), onClick: () => nav.push({ type: "calls" }) })),
@@ -3859,7 +3905,7 @@ function TypingScreen({ channelId }) {
   return h(React.Fragment, null,
     h(LargeTitle, { title: channelId ? L("Digitou e apagou no grupo", "Typed & quit in group") : NAMES.typing(), subtitle: L(`${people.length} ${plural(people.length, "pessoa", "pessoas")} · mais recentes primeiro`, `${people.length} ${plural(people.length, "person", "people")} · most recent first`) }),
     h(Search, { value: q, onChange: setQ, placeholder: L("Buscar por nome, @ ou servidor", "Search by name, @ or server") }),
-    h(Segmented, { value: seg, onChange: (v) => { setSeg(v); setLimit(40); }, options: segs.map(([v, l]) => [v, l, v === "all" ? null : countPeople(tests[v])]) }),
+    h(Chips, { label: L("Filtrar", "Filter"), value: seg, onChange: (v) => { setSeg(v); setLimit(40); }, options: segs.map(([v, l]) => [v, l, v === "all" ? null : countPeople(tests[v])]) }),
     people.length
       ? h(Group, null, people.slice(0, limit).map((g) => h(Flash, { key: g[0].userId, isNew: g[0].lastTypingAt > typingSnap }, h(PersonRow, { rows: g, onOpen: () => nav.push({ type: "person", userId: g[0].userId, channelId }) }))))
       : h(Empty, { icon: "keyboard", title: base.length ? L("Nada com esse filtro", "Nothing matches this filter") : L("Ninguém desistiu ainda", "No one has quit yet") }, base.length ? null : L("Quando alguém digitar pra você e não enviar, aparece aqui.", "When someone types to you and doesn't send, it shows up here.")),
@@ -3917,7 +3963,7 @@ function MessageCard({ avatar, name, action, meta, time, body, bodyTone, extra, 
         meta ? h("span", { className: "dmtt-row-sub" }, meta) : null),
       time ? h("span", { className: "dmtt-row-time" }, time) : null,
       onDelete ? h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: onDelete }, h(Icon, { d: ICON_X, size: 12 })) : null),
-    body ? h("div", { className: `dmtt-bubble ${bodyTone ? `is-${bodyTone}` : ""}`, onClick: long ? () => setOpen(!open) : undefined, style: long ? { cursor: "pointer" } : null }, long && !open ? `${body.slice(0, 160)}…` : body) : null,
+    body ? h("div", { className: `dmtt-bubble ${bodyTone ? `is-${bodyTone}` : ""}`, onClick: long ? () => setOpen(!open) : undefined, role: long ? "button" : undefined, tabIndex: long ? 0 : undefined, "aria-expanded": long ? open : undefined, onKeyDown: long ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } } : undefined, style: long ? { cursor: "pointer" } : null }, long && !open ? `${body.slice(0, 160)}…` : body) : null,
     extra || null,
     onJump ? h("button", { className: "dmtt-link", onClick: onJump }, L("Ir para mensagem", "Jump to message")) : null);
 }
@@ -4168,7 +4214,7 @@ function FriendsScreen({ tab: initialTab }) {
         h(NavRow, { icon: "shield", color: "#ff9f0a", title: NAMES.spamFilter(), detail: rules ? String(rules) : L("Desligado", "Off"), onClick: () => nav.push({ type: "spamFilter" }) }),
         h(NavRow, { icon: "ban", color: "#8e8e93", title: "Spam", detail: String(spam.length), onClick: () => nav.push({ type: "spam" }) })),
       h(BulkProgress),
-      pending.length ? h(Segmented, { value: rf, onChange: setRf, options: [["all", L("Todos", "All"), counts.all], ["mutual", L("Em comum", "Mutual"), counts.mutual], ["fresh", L("Conta nova", "New account"), counts.fresh], ["bot", "Bots", counts.bot]] }) : null,
+      pending.length ? h(Chips, { label: L("Filtrar", "Filter"), value: rf, onChange: setRf, options: [["all", L("Todos", "All"), counts.all], ["mutual", L("Em comum", "Mutual"), counts.mutual], ["fresh", L("Conta nova", "New account"), counts.fresh], ["bot", "Bots", counts.bot]] }) : null,
       shown.length ? h(Group, { header: L(`${shown.length} ${plural(shown.length, "pedido pendente", "pedidos pendentes")}`, `${shown.length} pending ${plural(shown.length, "request", "requests")}`) }, shown.map((r) => h(RequestRow, { key: r.id, r, isNew: r.sentAt > seen.req })))
         : pending.length ? h(Empty, { icon: "search", title: L("Nenhum pedido neste filtro", "No requests match this filter") }, rf === "mutual" || rf === "bot" ? L("Amigos em comum e possíveis bots aparecem conforme os perfis carregam, enquanto você rola a lista.", "Mutual friends and possible bots show up as profiles load while you scroll the list.") : null)
         : h(Empty, { icon: "personBell", title: L("Nenhum pedido pendente", "No pending requests") }, L("Quando alguém te mandar um pedido de amizade, aparece aqui.", "When someone sends you a friend request, it shows up here.")),
@@ -4321,7 +4367,7 @@ function StatusFeed() {
     return newer ? L(`por ${fmtDur(newer.at - e.at)}`, `for ${fmtDur(newer.at - e.at)}`) : L(`há ${fmtDur(Date.now() - e.at)}`, `${fmtDur(Date.now() - e.at)} ago`);
   };
   const filter = ids.length <= 4
-    ? h(Segmented, { value: who, onChange: setWho, options: [["all", L("Todos", "Everyone")], ...ids.map((id) => [id, nameOf(id, list[id])])] })
+    ? h(Chips, { label: L("Pessoa", "Person"), value: who, onChange: setWho, options: [["all", L("Todos", "Everyone")], ...ids.map((id) => [id, nameOf(id, list[id])])] })
     : h("div", { className: "dmtt-row2" }, h("select", { className: "dmtt-select dmtt-select-wide", value: who, onChange: (e) => setWho(e.target.value) },
         h("option", { value: "all" }, L("Todos os VIPs", "All VIPs")), ids.map((id) => h("option", { key: id, value: id }, nameOf(id, list[id])))));
   return h(React.Fragment, null,
@@ -4516,8 +4562,8 @@ function MessagesFeed({ channelId }) {
   return h(React.Fragment, null,
     searchBar,
     h(Group, null, h(NavRow, { icon: "archive", color: "#8e8e93", title: L("Mensagens antigas", "Old messages"), detail: archives.length ? `${archives.length}` : L("Nenhuma", "None"), onClick: () => nav.push({ type: "archives" }) })),
-    here.length ? h(Segmented, { value: where, onChange: setWhere, options: [["here", hereLabel, here.length], ["all", L("Todos os lugares", "Everywhere"), all.length]] }) : null,
-    h(Segmented, { value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd], ...(nSent ? [["sent", L("Enviadas", "Sent"), nSent]] : [])] }),
+    here.length ? h(Chips, { label: L("Onde", "Where"), value: where, onChange: setWhere, options: [["here", hereLabel, here.length], ["all", L("Todos os lugares", "Everywhere"), all.length]] }) : null,
+    h(Chips, { label: L("Filtrar", "Filter"), value: kind, onChange: (v) => { setKind(v); setLimit(40); }, options: [["all", L("Tudo", "All")], ["deleted", L("Apagadas", "Deleted"), nDel], ["edited", L("Editadas", "Edited"), nEd], ...(nSent ? [["sent", L("Enviadas", "Sent"), nSent]] : [])] }),
     list.length ? h(DayList, { items: list.slice(0, limit), getTime: activityAt, render: (m) => h(Flash, { key: m.id, isNew: isFeedItem(m) && activityAt(m) > seenBefore }, h(ChangeCard, { m, isNew: false, showPlace: where === "all" })) })
       : h(Empty, { icon: "clock", title: L("Nada por aqui", "Nothing here") }, kind === "all" ? L("Quando um VIP mandar, editar ou apagar uma mensagem, aparece aqui.", "When a VIP sends, edits or deletes a message, it shows up here.") : L("Quando um VIP apagar ou editar uma mensagem, aparece aqui.", "When a VIP deletes or edits a message, it shows up here.")),
     list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 40) }, L("Mostrar mais", "Show more")) : null);
@@ -4650,8 +4696,8 @@ function MessagesList({ id, messages }) {
   if (onlyChanged) mine = mine.filter((m) => m.deletedAt || m.edits?.length);
   return h(React.Fragment, null,
     h("div", { className: "dmtt-row2" },
-      h(Segmented, { value: onlyChanged ? "c" : "a", onChange: (v) => setOnlyChanged(v === "c"), options: [["a", L("Todas", "All")], ["c", L("Apagadas/editadas", "Deleted/edited"), changed]] }),
-      h(Segmented, { value: where, onChange: setWhere, options: [["all", L("Tudo", "Everywhere")], ["guild", L("Servidores", "Servers")], ["dm", L("Privado", "DMs")]] })),
+      h(Chips, { label: L("Filtrar", "Filter"), value: onlyChanged ? "c" : "a", onChange: (v) => setOnlyChanged(v === "c"), options: [["a", L("Todas", "All")], ["c", L("Apagadas/editadas", "Deleted/edited"), changed]] }),
+      h(Chips, { label: L("Onde", "Where"), value: where, onChange: setWhere, options: [["all", L("Tudo", "Everywhere")], ["guild", L("Servidores", "Servers")], ["dm", L("Privado", "DMs")]] })),
     mine.length ? h(DayList, { items: mine.slice(0, limit), getTime: (m) => m.createdAt, render: (m) => {
       const edited = m.edits?.length > 0;
       const current = edited ? m.edits[m.edits.length - 1].content : m.content;
@@ -4782,19 +4828,34 @@ function VoiceList({ id, sessions: list }) {
 }
 
 function VipAlerts({ id, toggles }) {
+  useBus(profileBus);
   const [open, setOpen] = React.useState(false);
   const on = toggles.filter(([f]) => vipFlag(id, f));
+  const off = toggles.filter(([f]) => !vipFlag(id, f));
+  const watch = getProfileWatch();
+  const watching = watch === id;
+  const other = watch && watch !== id && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
+  const me = nameOf(id, getVipList()[id] || {});
+  const toggleWatch = (v) => {
+    if (v && other) return UI.showConfirmationModal(L("Monitorar perfil", "Watch profile"), L(`Só dá pra monitorar uma pessoa por vez. Trocar ${other} por ${me}?`, `You can only watch one person at a time. Switch from ${other} to ${me}?`), { confirmText: L("Trocar", "Switch"), cancelText: L("Cancelar", "Cancel"), onConfirm: () => setProfileWatch(id) });
+    setProfileWatch(v ? id : null);
+  };
   const summary = !on.length ? L("Nenhum aviso", "No alerts") : on.length === toggles.length ? L("Todos ligados", "All on") : L(`${on.length} de ${toggles.length} ligados`, `${on.length} of ${toggles.length} on`);
-  return h(Group, { footer: open ? L("Como o aviso chega (Discord, Windows, som) fica em Ajustes → Avisos.", "How you're notified (Discord, Windows, sound) is in Settings → Notifications.") : null },
+  const sub = [off.length && on.length ? L(`Desligados: ${off.map(([, l]) => l.toLowerCase()).join(", ")}`, `Off: ${off.map(([, l]) => l.toLowerCase()).join(", ")}`) : null, watching ? L("Monitorando o perfil", "Watching profile") : null].filter(Boolean).join(" · ");
+  const footer = open ? [L("Como o aviso chega (Discord, Windows, som) fica em Ajustes › Avisos.", "How you're notified (Discord, Windows, sound) is in Settings › Notifications."), watching ? L("O perfil é conferido a cada 15 minutos.", "The profile is checked every 15 minutes.") : other ? L(`Agora monitorando o perfil de ${other}.`, `Now watching ${other}'s profile.`) : null].filter(Boolean).join(" ") : null;
+  return h(Group, { footer },
     h("div", { className: `dmtt-cell ${open ? "is-open" : ""}` },
-      h("div", { className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => setOpen(!open) },
+      h("button", { className: "dmtt-row", "aria-expanded": open, onClick: () => setOpen(!open) },
         h(IconTile, { name: "bell", color: "#ff453a", size: 26 }),
-        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Avisar quando", "Notify me when")), !open && on.length && on.length < toggles.length ? h("span", { className: "dmtt-row-sub" }, on.map(([, l]) => l).join(" · ")) : null),
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Avisar quando", "Notify me when")), !open && sub ? h("span", { className: "dmtt-row-sub" }, sub) : null),
         h("span", { className: "dmtt-row-detail" }, summary),
         h("span", { className: "dmtt-chev dmtt-chev-rot" }, h(Icon, { d: ICON_CHEVRON, size: 14 })))),
     open ? toggles.map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => setVip(id, { [f]: !vipFlag(id, f) }) },
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
-      h(Switch, { checked: vipFlag(id, f), onChange: (v) => setVip(id, { [f]: v }), label: l }))) : null);
+      h(Switch, { checked: vipFlag(id, f), onChange: (v) => setVip(id, { [f]: v }), label: l }))) : null,
+    open ? h("div", { key: "watch", className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => toggleWatch(!watching) },
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Monitorar perfil", "Watch profile")), h("span", { className: "dmtt-row-sub" }, L("Contas conectadas, bio, pronomes e banner. Uma pessoa por vez.", "Connected accounts, bio, pronouns and banner. One person at a time."))),
+      h(Switch, { checked: watching, onChange: toggleWatch, label: L("Monitorar perfil", "Watch profile") })) : null);
 }
 const WEEKDAYS = () => L(["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"], ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
 function FrequencyMap({ id }) {
@@ -4807,7 +4868,7 @@ function FrequencyMap({ id }) {
     h("div", { className: "dmtt-freq-head" },
       h("span", { className: "dmtt-freq-title" }, L("Frequência", "Frequency")),
       h("span", { className: "dmtt-freq-sub" }, total ? L(`últimas ${Math.min(weeks, FREQ_WEEKS)} ${plural(Math.min(weeks, FREQ_WEEKS), "semana", "semanas")}`, `last ${Math.min(weeks, FREQ_WEEKS)} ${plural(Math.min(weeks, FREQ_WEEKS), "week", "weeks")}`) : null)),
-    total ? h("div", { className: "dmtt-freq-grid" },
+    total ? h("div", { className: "dmtt-freq-grid", role: "img", "aria-label": (() => { const hrs = hourSums(sum); const top = bestWindow(hrs, 2); const dt = Array.from({ length: 7 }, (_, d) => sum.slice(d * 24, d * 24 + 24).reduce((a, b) => a + b, 0)); return L(`Mais online entre ${top.from}h e ${top.to}h, principalmente ${WEEKDAYS()[dt.indexOf(Math.max(...dt))]}`, `Mostly online between ${top.from}:00 and ${top.to}:00, especially ${WEEKDAYS()[dt.indexOf(Math.max(...dt))]}`); })() },
       days.map((d, di) => h(React.Fragment, { key: d },
         h("span", { className: "dmtt-freq-day" }, d),
         sum.slice(di * 24, di * 24 + 24).map((m, hr) => {
@@ -4866,9 +4927,9 @@ function VipRoutineScreen({ userId: id }) {
   const talkTop = r.talk.some(Boolean) ? bestWindow(r.talk, 2) : null;
   const devTot = r.devP.reduce((a, b) => a + b, 0) + r.devM.reduce((a, b) => a + b, 0);
   const mobPct = devTot ? Math.round((r.devM.reduce((a, b) => a + b, 0) / devTot) * 100) : null;
-  const row = (title, detail) => h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, title)), h("span", { className: "dmtt-row-detail" }, detail));
+  const row = (title, detail, key) => h("div", { key: key || (typeof title === "string" ? title : undefined), className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, title)), h("span", { className: "dmtt-row-detail" }, detail));
   return h(React.Fragment, null,
-    h(LargeTitle, { title: L("Rotina", "Routine"), subtitle: L(`${name} · últimas ${FREQ_WEEKS} semanas`, `${name} · last ${FREQ_WEEKS} weeks`) }),
+    h(LargeTitle, { title: L("Rotina", "Routine"), subtitle: (() => { const w = Math.max(1, Math.min(r.weeks, FREQ_WEEKS)); return L(`${name} · ${w === 1 ? "última semana" : `últimas ${w} semanas`}`, `${name} · ${w === 1 ? "last week" : `last ${w} weeks`}`); })() }),
     h(Stats, { items: [[avgDay >= 60000 ? fmtDur(avgDay) : "—", L("média por dia", "daily average")], [r.thisWeek ? fmtDur(r.thisWeek * 60000) : "0 min", L("esta semana", "this week")], [diffTxt, L("vs. semana passada", "vs. last week")]] }),
     h("div", { className: "dmtt-routine-map" }, h(FrequencyMap, { id })),
     h(Group, { header: L("Hábitos", "Habits"), footer: L("A comparação com a semana passada usa o mesmo período (até este dia e hora).", "The comparison with last week covers the same period (up to this day and hour).") },
@@ -4944,7 +5005,7 @@ function NoteComposer({ id }) {
   const [text, setText] = React.useState("");
   const add = () => { if (!text.trim()) return; addNote(id, text); setText(""); };
   return h("div", { className: "dmtt-row dmtt-row-col" },
-    h("textarea", { className: "dmtt-text dmtt-textarea", rows: 3, placeholder: L("Escreva uma nota…", "Write a note…"), value: text, onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); add(); } } }),
+    h("textarea", { className: "dmtt-text dmtt-textarea", rows: 3, "aria-label": L("Nova nota", "New note"), placeholder: L("Escreva uma nota…", "Write a note…"), value: text, onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); add(); } } }),
     h("div", { className: "dmtt-row-actions" }, h("button", { className: "dmtt-btn-primary", disabled: !text.trim(), onClick: add }, L("Adicionar nota", "Add note"))));
 }
 function BirthdayRow({ id }) {
@@ -4960,8 +5021,8 @@ function BirthdayRow({ id }) {
   return h("div", { className: "dmtt-row dmtt-row-col" },
     h("span", { className: "dmtt-row-title" }, L("Aniversário", "Birthday")),
     h("div", { className: "dmtt-date-inputs" },
-      h("select", { className: "dmtt-select", value: d, onChange: (e) => { setD(e.target.value); save(e.target.value, m, y); } }, h("option", { value: "" }, L("Dia", "Day")), Array.from({ length: 31 }, (_, i) => h("option", { key: i, value: i + 1 }, i + 1))),
-      h("select", { className: "dmtt-select", value: m, onChange: (e) => { setM(e.target.value); save(d, e.target.value, y); } }, h("option", { value: "" }, L("Mês", "Month")), MONTHS().map((name, i) => h("option", { key: i, value: i + 1 }, name))),
+      h("select", { className: "dmtt-select", "aria-label": L("Dia", "Day"), value: d, onChange: (e) => { setD(e.target.value); save(e.target.value, m, y); } }, h("option", { value: "" }, L("Dia", "Day")), Array.from({ length: 31 }, (_, i) => h("option", { key: i, value: i + 1 }, i + 1))),
+      h("select", { className: "dmtt-select", "aria-label": L("Mês", "Month"), value: m, onChange: (e) => { setM(e.target.value); save(d, e.target.value, y); } }, h("option", { value: "" }, L("Mês", "Month")), MONTHS().map((name, i) => h("option", { key: i, value: i + 1 }, name))),
       h("input", { className: "dmtt-text dmtt-year", inputMode: "numeric", placeholder: L("Ano (opcional)", "Year (optional)"), value: y, onChange: (e) => setY(e.target.value.replace(/[^0-9]/g, "").slice(0, 4)), onBlur: () => save(d, m, y) }),
       b ? h("button", { className: "dmtt-link", onClick: () => { setD(""); setM(""); setY(""); setDates(id, { birthday: null }); } }, L("Limpar", "Clear")) : null));
 }
@@ -4978,9 +5039,9 @@ function CustomDateForm({ id }) {
   };
   return h("div", { className: "dmtt-row dmtt-row-col" },
     h("span", { className: "dmtt-row-title" }, L("Nova data", "New date")),
-    h("input", { className: "dmtt-text", placeholder: L("Nome, ex.: Prova, Viagem", "Name, e.g. Exam, Trip"), value: name, onChange: (e) => setName(e.target.value) }),
+    h("input", { className: "dmtt-text", "aria-label": L("Nome da data", "Date name"), placeholder: L("Nome, ex.: Prova, Viagem", "Name, e.g. Exam, Trip"), value: name, onChange: (e) => setName(e.target.value) }),
     h("div", { className: "dmtt-date-inputs" },
-      h("input", { className: "dmtt-text dmtt-date", type: "date", value: date, onChange: (e) => setDate(e.target.value) }),
+      h("input", { className: "dmtt-text dmtt-date", type: "date", "aria-label": L("Data", "Date"), value: date, onChange: (e) => setDate(e.target.value) }),
       h("label", { className: "dmtt-check-label" }, h(Switch, { checked: yearly, onChange: setYearly, label: L("Todo ano", "Every year") }), L("Todo ano", "Every year"))),
     h("div", { className: "dmtt-row-actions" }, h("button", { className: "dmtt-btn-primary", disabled: !name.trim() || !date, onClick: add }, L("Adicionar data", "Add date"))));
 }
@@ -5015,24 +5076,9 @@ function DatesTimeRow() {
   const v = getSettings().datesNotifyAt || "";
   return h("div", { className: "dmtt-row" },
     h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Horário do aviso", "Notification time"))),
-    h("select", { className: "dmtt-select", value: v ? "fixed" : "", onChange: (e) => setSetting("datesNotifyAt", e.target.value ? "09:00" : "") },
+    h("select", { className: "dmtt-select", "aria-label": L("Horário do aviso", "Notification time"), value: v ? "fixed" : "", onChange: (e) => setSetting("datesNotifyAt", e.target.value ? "09:00" : "") },
       h("option", { value: "" }, L("Ao abrir o Discord", "When Discord opens")), h("option", { value: "fixed" }, L("Horário fixo", "Fixed time"))),
-    v ? h("input", { className: "dmtt-text dmtt-time", type: "time", value: v, onChange: (e) => setSetting("datesNotifyAt", e.target.value || "09:00") }) : null);
-}
-function WatchProfileRow({ id }) {
-  useBus(profileBus);
-  const watch = getProfileWatch();
-  const on = watch === id;
-  const other = watch && watch !== id && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
-  const me = nameOf(id, getVipList()[id] || {});
-  const toggle = (v) => {
-    if (v && other) return UI.showConfirmationModal(L("Monitorar perfil", "Watch profile"), L(`Só dá pra monitorar uma pessoa por vez. Trocar ${other} por ${me}?`, `You can only watch one person at a time. Switch from ${other} to ${me}?`), { confirmText: L("Trocar", "Switch"), cancelText: L("Cancelar", "Cancel"), onConfirm: () => setProfileWatch(id) });
-    setProfileWatch(v ? id : null);
-  };
-  return h(Group, { footer: on ? L("Confere contas conectadas, bio, pronomes e banner a cada 15 minutos. Só uma pessoa por vez.", "Checks connected accounts, bio, pronouns and banner every 15 minutes. One person at a time.") : other ? L(`Agora monitorando: ${other}.`, `Now watching: ${other}.`) : L("Registra contas conectadas, bio, pronomes e banner. Só uma pessoa por vez.", "Logs connected accounts, bio, pronouns and banner. One person at a time.") },
-    h("div", { className: "dmtt-row" }, h(IconTile, { name: "eye", color: "#5e5ce6" }),
-      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Monitorar perfil", "Watch profile"))),
-      h(Switch, { checked: on, onChange: toggle, label: L("Monitorar perfil", "Watch profile") })));
+    v ? h("input", { className: "dmtt-text dmtt-time", type: "time", "aria-label": L("Horário", "Time"), value: v, onChange: (e) => setSetting("datesNotifyAt", e.target.value || "09:00") }) : null);
 }
 function VipPersonScreen({ userId: id }) {
   useBus(vipBus, historyBus);
@@ -5061,20 +5107,18 @@ function VipPersonScreen({ userId: id }) {
   return h(React.Fragment, null,
     h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: (() => { const t = safe(() => agoraOf(id, !!p && p.status !== "offline")); return t ? h("div", { className: "dmtt-agora" }, t) : null; })() },
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
-      typing.length ? h(ActionButton, { icon: h(SIcon, { d: SI.keyboard, size: 18 }), label: NAMES.typing(), onClick: () => nav.push({ type: "person", userId: id }) }) : null,
       h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.gallery, size: 18 }), label: L("Galeria", "Gallery"), onClick: () => nav.push({ type: "vipGallery", userId: id }) }),
-      h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) }),
-      h(ActionButton, { icon: h(SIcon, { d: SI.star, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
+      h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível", "invisible")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
-    h(WatchProfileRow, { id }),
     h(Segmented, { value: tab, onChange: setTab, options: [topt("activity", L("Atividade", "Activity")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
     tab === "profile" ? h(ProfileFeed, { userId: id })
       : tab === "activity" ? h(ActivityList, { id, events: d.events })
       : tab === "messages" ? h(MessagesList, { id, messages: d.messages })
       : tab === "voice" ? h(VoiceList, { id, sessions: d.voice || [] })
-      : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }));
+      : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }),
+    h(Group, null, h(NavRow, { title: L("Remover da Lista VIP", "Remove from VIP list"), danger: true, onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })));
 }
 
 function CallsScreen() {
@@ -5624,7 +5668,7 @@ const CSS = `
   --c-hover: var(--background-modifier-hover, rgba(255,255,255,.05));
   --c-sep: var(--border-subtle, rgba(255,255,255,.07));
   --c-link: var(--text-link, #00a8fc);
-  --c-red: #ff453a; --c-green: #30d158;
+  --c-red: #ff6961; --c-green: #30d158;
   display: flex; flex-direction: column; height: min(620px, 70vh); color: var(--c-text); font-size: 14px; line-height: 1.35; position: relative;
   -webkit-font-smoothing: antialiased;
 }
@@ -5632,10 +5676,10 @@ const CSS = `
 .dmtt-navbar { display: flex; align-items: center; gap: 8px; height: 36px; flex: none; border-bottom: 1px solid var(--c-sep); padding: 0 2px 6px; }
 .dmtt-navbar-spacer { flex: 1; }
 .dmtt-brand { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--c-muted); }
-.dmtt-back { display: inline-flex; align-items: center; gap: 0; margin-left: -6px; padding: 4px 8px 4px 2px; border: none; border-radius: 8px; background: none; color: var(--c-link); font-size: 15px; cursor: pointer; max-width: 70%; }
+.dmtt-back { display: inline-flex; align-items: center; gap: 0; min-height: 32px; box-sizing: border-box; margin-left: -6px; padding: 4px 8px 4px 2px; border: none; border-radius: 8px; background: none; color: var(--c-link); font-size: 15px; cursor: pointer; max-width: 70%; }
 .dmtt-back span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dmtt-back:hover, .dmtt-nav-icon:hover { background: var(--c-hover); }
-.dmtt-nav-icon { display: inline-flex; padding: 6px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; }
+.dmtt-nav-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; box-sizing: border-box; padding: 6px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; }
 .dmtt-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 0 20px 0; margin-right: calc(-1 * var(--dmtt-sbw, 8px)); scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 12px; animation: dmtt-push .22s cubic-bezier(.2,.8,.2,1); scrollbar-width: thin; scrollbar-color: var(--scrollbar-thin-thumb, rgba(0,0,0,.4)) var(--scrollbar-thin-track, transparent); }
 @keyframes dmtt-push { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
 .dmtt-largetitle { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 14px 4px 0; }
@@ -5643,7 +5687,7 @@ const CSS = `
 .dmtt-largetitle-sub { margin-top: 3px; font-size: 13px; color: var(--c-muted); }
 .dmtt-largetitle-sub::first-letter { text-transform: uppercase; }
 
-.dmtt-search { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; border-radius: 10px; background: var(--c-fill2); color: var(--c-muted); }
+.dmtt-search { display: flex; flex: none; align-items: center; gap: 6px; height: 34px; box-sizing: border-box; padding: 0 10px; border-radius: 10px; background: var(--c-fill2); color: var(--c-muted); }
 .dmtt-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; color: var(--c-text); font-size: 14px; }
 .dmtt-search input::placeholder { color: var(--c-muted); }
 .dmtt-search:focus-within { box-shadow: 0 0 0 2px rgba(10,132,255,.6); }
@@ -5654,10 +5698,10 @@ const CSS = `
 .dmtt-seg.is-fade-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); }
 .dmtt-seg.is-fade-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); }
 .dmtt-seg.is-fade-left.is-fade-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
-.dmtt-seg-btn { flex: 1 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 10px; border: none; border-radius: 7px; background: transparent; color: var(--c-muted); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
+.dmtt-seg-btn { flex: 1 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 32px; padding: 0 10px; border: none; border-radius: 7px; background: transparent; color: var(--c-muted); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
 .dmtt-seg-btn:hover { color: var(--c-text); }
 .dmtt-seg-btn.is-on { background: var(--background-modifier-selected, rgba(255,255,255,.12)); color: var(--c-strong); box-shadow: 0 1px 3px rgba(0,0,0,.3); font-weight: 600; }
-.dmtt-seg-n { font-size: 11px; opacity: .65; font-variant-numeric: tabular-nums; }
+.dmtt-seg-n { font-size: 11px; opacity: .85; font-variant-numeric: tabular-nums; }
 .dmtt-row2 { display: flex; flex-wrap: wrap; gap: 8px; }
 .dmtt-row2 > .dmtt-seg { flex: 1 1 200px; }
 
@@ -5689,7 +5733,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-chev-rot { transition: transform .18s; }
 .dmtt-cell.is-open > .dmtt-row .dmtt-chev-rot { transform: rotate(90deg); }
 .dmtt-tile { display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; color: #fff; flex: none; }
-.dmtt-badge-red { min-width: 17px; height: 17px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: #ff3b30; color: #fff; font-family: "gg sans", "Noto Sans", -apple-system, "Segoe UI", sans-serif; font-size: 11px; font-weight: 800; line-height: 17px; letter-spacing: 0; font-variant-numeric: tabular-nums; text-align: center; flex: none; -webkit-font-smoothing: antialiased; }
+.dmtt-badge-red { min-width: 17px; height: 17px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: #e0281f; color: #fff; font-family: "gg sans", "Noto Sans", -apple-system, "Segoe UI", sans-serif; font-size: 11px; font-weight: 800; line-height: 17px; letter-spacing: 0; font-variant-numeric: tabular-nums; text-align: center; flex: none; -webkit-font-smoothing: antialiased; }
 .dmtt-countpill { font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 8px; line-height: 16px; background: var(--c-fill2); color: var(--c-text); }
 .dmtt-strong { color: var(--c-strong); font-weight: 600; }
 .dmtt-num { font-variant-numeric: tabular-nums; }
@@ -5737,16 +5781,16 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-text { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; border: none; border-radius: 8px; background: var(--c-fill2); color: var(--c-strong); font-size: 14px; outline: none; }
 .dmtt-text:focus, .dmtt-stepper input:focus { box-shadow: 0 0 0 2px rgba(10,132,255,.6); }
 .dmtt-search-hit .dmtt-crumb { padding: 8px 14px 0; font-size: 11px; color: var(--c-muted); }
-.dmtt-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 16px; border: none; border-radius: 10px; background: #0a84ff; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+.dmtt-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 16px; border: none; border-radius: 10px; background: #0071e3; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
 .dmtt-btn-primary:hover { filter: brightness(1.1); }
 .dmtt-center { display: flex; justify-content: center; }
-.dmtt-link { align-self: flex-start; border: none; background: none; padding: 2px 4px; margin-left: -4px; border-radius: 6px; color: var(--c-link); font-size: 13px; font-weight: 500; cursor: pointer; flex: none; }
+.dmtt-link { align-self: flex-start; border: none; background: none; padding: 6px 4px; margin: -4px 0 -4px -4px; border-radius: 6px; color: var(--c-link); font-size: 13px; font-weight: 500; cursor: pointer; flex: none; }
 .dmtt-link:hover { background: var(--c-hover); }
 .dmtt-row > .dmtt-link { align-self: center; margin-left: 0; }
 .dmtt-more { align-self: center; border: none; background: none; color: var(--c-link); font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
 .dmtt-more:hover { background: var(--c-hover); }
 .dmtt-del { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: none; border: none; border-radius: 50%; background: var(--c-fill2); color: var(--c-muted); cursor: pointer; opacity: 0; transition: opacity .12s; padding: 0; }
-.dmtt-row:hover .dmtt-del, .dmtt-card:hover .dmtt-del, .dmtt-cell:hover .dmtt-del { opacity: 1; }
+.dmtt-row:hover .dmtt-del, .dmtt-card:hover .dmtt-del, .dmtt-cell:hover .dmtt-del, .dmtt-row:focus-within .dmtt-del, .dmtt-card:focus-within .dmtt-del, .dmtt-del:focus-visible { opacity: 1; }
 .dmtt-del:hover { background: rgba(255,69,58,.18); color: var(--c-red); }
 .dmtt-ok { display: inline-flex; align-items: center; flex: none; font-size: 12px; font-weight: 600; color: var(--c-green); }
 .dmtt-tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 6px; background: var(--c-fill2); color: var(--c-text); border: none; white-space: nowrap; flex: none; font-family: inherit; }
@@ -5819,6 +5863,23 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-addid .dmtt-text { flex: 1; }
 .dmtt-addid .dmtt-btn-primary { height: 34px; flex: none; }
 .dmtt-btn-primary:disabled { opacity: .45; cursor: default; filter: none; }
+.dmtt-app :focus { outline: none; }
+.dmtt-app :focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; border-radius: 8px; }
+.dmtt-app .dmtt-row:focus-visible, .dmtt-app .dmtt-tile-card:focus-visible { outline-offset: -2px; }
+.dmtt-app input::placeholder, .dmtt-app textarea::placeholder { color: var(--c-muted); opacity: 1; }
+.dmtt-flashwrap.is-flash .dmtt-row-sub, .dmtt-flashwrap.is-flash .dmtt-card-action, .dmtt-flashwrap.is-flash .dmtt-meta-line, .dmtt-flashwrap.is-flash .dmtt-row-time, .dmtt-fr.is-flash .dmtt-row-sub, .dmtt-fr.is-flash .dmtt-fr-user, .dmtt-fr.is-flash .dmtt-fr-time { color: #a8aeb6; }
+.dmtt-seg-wrap { position: relative; flex: none; }
+.dmtt-flashwrap.is-flash .dmtt-link, .dmtt-fr.is-flash .dmtt-link, .dmtt-fr.is-flash .dmtt-frbtn.is-plain { color: #4db3ff; }
+.dmtt-seg-alert { position: absolute; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: #e0281f; box-shadow: 0 0 0 2px var(--c-fill2); pointer-events: none; }
+.dmtt-seg-alert.is-right { right: 3px; }
+.dmtt-seg-alert.is-left { left: 3px; }
+.dmtt-chipbar { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
+.dmtt-filter { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 12px; border: none; border-radius: 15px; background: var(--c-fill2); color: var(--c-text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.dmtt-filter:hover { background: var(--c-hover); }
+.dmtt-filter.is-on { background: #0071e3; color: #fff; }
+.dmtt-filter-n { font-size: 12px; color: var(--c-muted); font-variant-numeric: tabular-nums; }
+.dmtt-filter.is-on .dmtt-filter-n { color: #fff; }
+.dmtt-filter-n.is-alert { min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #e0281f; color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .dmtt-agora { margin-top: 8px; font-size: 12.5px; color: var(--c-muted); text-align: center; }
 .dmtt-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .dmtt-gallery .dmtt-media { width: 100%; height: auto; aspect-ratio: 1; }
@@ -5837,7 +5898,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-addid-msg.is-ok { color: var(--c-green); }
 .dmtt-addid-msg.is-err { color: #ff6961; }
 .dmtt-select-wide { max-width: 100%; width: 100%; height: 34px; }
-.dmtt-seg-n.is-alert { opacity: 1; min-width: 14px; height: 14px; padding: 0 4px; margin-left: 0; box-sizing: border-box; border-radius: 7px; background: #ff3b30; color: #fff; font-family: "gg sans", "Noto Sans", -apple-system, "Segoe UI", sans-serif; font-size: 10px; font-weight: 800; line-height: 14px; letter-spacing: 0; text-align: center; display: inline-block; -webkit-font-smoothing: antialiased; }
+.dmtt-seg-n.is-alert { opacity: 1; min-width: 14px; height: 14px; padding: 0 4px; margin-left: 0; box-sizing: border-box; border-radius: 7px; background: #e0281f; color: #fff; font-family: "gg sans", "Noto Sans", -apple-system, "Segoe UI", sans-serif; font-size: 10px; font-weight: 800; line-height: 14px; letter-spacing: 0; text-align: center; display: inline-block; -webkit-font-smoothing: antialiased; }
 .dmtt-fr { transition: background-color 1.2s ease; }
 .dmtt-flashwrap { position: relative; transition: background-color 1.2s ease; }
 .dmtt-flashwrap.is-flash, .dmtt-flashwrap.is-flash > .dmtt-card, .dmtt-flashwrap.is-flash > .dmtt-cell { background-color: rgba(10, 132, 255, .09); }
@@ -5881,11 +5942,11 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-pc-banner { width: 120px; height: 42px; border-radius: 8px; object-fit: cover; }
 .dmtt-pc-none { font-size: 12px; color: var(--text-muted); }
 .dmtt-pc-arrow { color: var(--text-muted); }
-.dmtt-frbtn { height: 28px; padding: 0 14px; border-radius: 14px; border: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--c-text, #fff); transition: opacity .15s, filter .15s; }
+.dmtt-frbtn { height: 32px; padding: 0 14px; border-radius: 14px; border: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--c-fill2, rgba(120,120,128,.24)); color: var(--c-text, #fff); transition: opacity .15s, filter .15s; }
 .dmtt-frbtn:hover:not(:disabled) { filter: brightness(1.15); }
 .dmtt-frbtn:disabled { opacity: .5; cursor: default; }
-.dmtt-frbtn.is-primary { background: #0a84ff; color: #fff; }
-.dmtt-frbtn.is-plain { background: transparent; color: #0a84ff; padding: 0 6px; }
+.dmtt-frbtn.is-primary { background: #0071e3; color: #fff; }
+.dmtt-frbtn.is-plain { background: transparent; color: var(--c-link); padding: 0 6px; }
 .dmtt-fr { align-items: flex-start; }
 .dmtt-fr .dmtt-av { margin-top: 2px; }
 .dmtt-fr-head { display: flex; align-items: baseline; gap: 8px; }
@@ -5909,16 +5970,16 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-freq-title { font-size: 13px; font-weight: 600; color: var(--c-strong); }
 .dmtt-freq-sub { font-size: 11px; color: var(--c-muted); }
 .dmtt-freq-grid { display: grid; grid-template-columns: 26px repeat(24, minmax(0, 1fr)); gap: 2px; align-items: center; }
-.dmtt-freq-day { font-size: 10px; color: var(--c-muted); line-height: 1; }
+.dmtt-freq-day { font-size: 11px; color: var(--c-muted); line-height: 1; }
 .dmtt-freq-cell { aspect-ratio: 1; border-radius: 2px; background: var(--c-fill2, rgba(120,120,128,.18)); }
-.dmtt-freq-hour { font-size: 9px; color: var(--c-muted); margin-top: 2px; white-space: nowrap; }
+.dmtt-freq-hour { font-size: 11px; color: var(--c-muted); margin-top: 2px; white-space: nowrap; }
 .dmtt-freq-hour:last-child, .dmtt-hbars-axis > span:last-child { justify-self: end; }
 .dmtt-routine-map > .dmtt-freq { margin: 0; }
 .dmtt-freq-block { margin: 0; padding: 12px 12px 10px; }
 .dmtt-hbars { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; height: 64px; align-items: end; }
 .dmtt-hbar { display: flex; flex-direction: column-reverse; height: 100%; border-radius: 2px; background: var(--c-fill2, rgba(120,120,128,.18)); overflow: hidden; }
 .dmtt-hbar > span { display: block; width: 100%; flex: none; }
-.dmtt-hbars-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); font-size: 9px; color: var(--c-muted); margin-top: 3px; white-space: nowrap; }
+.dmtt-hbars-axis { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); font-size: 11px; color: var(--c-muted); margin-top: 3px; white-space: nowrap; }
 .dmtt-legend { display: flex; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--c-muted); }
 .dmtt-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 .dmtt-freq-empty { font-size: 12px; color: var(--c-muted); line-height: 1.4; }
@@ -5934,7 +5995,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-newdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0a84ff; margin-right: 6px; vertical-align: 2px; }
 .dmtt-avbtn { padding: 0; border: none; background: none; cursor: pointer; border-radius: 50%; flex: none; }
 .dmtt-app { overscroll-behavior: contain; }
-.dmtt-close { display: inline-flex; align-items: center; justify-content: center; padding: 6px; margin-left: 2px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; flex: none; }
+.dmtt-close { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; box-sizing: border-box; padding: 6px; margin-left: 2px; border: none; border-radius: 8px; background: none; color: var(--c-link); cursor: pointer; flex: none; }
 .dmtt-close:hover { background: var(--c-hover); }
 .dmtt-body::-webkit-scrollbar { width: 8px; }
 .dmtt-body::-webkit-scrollbar-thumb { background: var(--scrollbar-thin-thumb, rgba(255,255,255,.18)); border-radius: 4px; }
