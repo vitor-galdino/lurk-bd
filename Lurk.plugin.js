@@ -61,6 +61,7 @@ const CHANGELOG = [
     ["improved", "Filtros viraram etiquetas que nunca ficam cortadas, e quando uma aba com novidade está escondida aparece um aviso na borda.", "Filters are now chips that never get cut off, and a hidden tab with something new shows a dot at the edge."],
     ["improved", "Tela inicial: os cards deixam claro que contam o dia de hoje, e o de mensagens apagadas abre direto nas apagadas do Histórico VIP.", "Home: the cards make it clear they count today, and the deleted messages card opens straight to deleted messages in VIP history."],
     ["improved", "Amigos › Te removeram: tocar no card abre a conversa com a pessoa.", "Friends › Removed you: tapping a card opens the DM with that person."],
+    ["improved", "Textos revisados: \"Novos contatos\" agora se chama \"Desconhecidos\", Tempo em call e Histórico VIP têm páginas próprias nos Ajustes, o perfil do VIP mostra quantas vezes a pessoa ficou invisível hoje, e avisos e erros ficaram mais curtos e claros.", "Reworded text: \"New contacts\" is now \"Strangers\", Call time and VIP history have their own pages in Settings, the VIP page shows how many times the person was invisible today, and notices and errors are shorter and clearer."],
     ["improved", "Dá para usar o Lurk pelo teclado com indicação de foco, as abas mudam com as setas, e números, botões e o mapa da Rotina ficaram mais legíveis.", "Lurk now works by keyboard with a visible focus ring, tabs switch with the arrow keys, and numbers, buttons and the Routine map are easier to read."],
 
     ["fixed", "Fotos de perfil, banners e fotos e vídeos salvos dos VIPs apareciam como \"?\" ou não abriam, mesmo estando salvos na pasta LurkMedia. Agora aparecem normalmente.", "VIPs' saved avatars, banners, photos and videos showed up as \"?\" or wouldn't open, even though they were saved in the LurkMedia folder. They show up normally now."],
@@ -432,10 +433,10 @@ async function checkForUpdate(manual = false) {
     const sigText = await fetchText(`${UPDATE_URL}.sig?t=${Date.now()}`);
     if (!(await verifySignature(code, sigText))) throw new Error(L("assinatura da atualização inválida, nada foi instalado", "update signature is invalid, nothing was installed"));
     await installUpdate(code);
-    if (manual) toast(L(`Atualizando para o Lurk ${remote}…`, `Updating to Lurk ${remote}…`), { type: "success" });
+    if (manual) toast(L(`Atualizando pra o Lurk ${remote}…`, `Updating to Lurk ${remote}…`), { type: "success" });
   } catch (e) {
     updater.error = String(e?.message || e);
-    if (manual) toast(L(`Não foi possível procurar atualização: ${updater.error}`, `Couldn't check for updates: ${updater.error}`), { type: "error" });
+    if (manual) toast(L("Não foi possível procurar atualização. Confira sua internet e tente de novo em Ajustes › Atualizações.", "Couldn't check for updates. Check your internet and try again in Settings › Updates."), { type: "error" });
   } finally { updater.checking = false; updateBus.emit(); }
 }
 function changesSince(from) {
@@ -461,11 +462,11 @@ function afterUpdateCheck() {
   if (!last || cmpVer(VERSION, last) <= 0 || !changesSince(last).length) return;
   const mode = getSettings().changelogMode;
   if (mode === "always") return setTimeout(() => showChangelog(last), 1500);
-  if (mode === "never") return toast(L(`Lurk atualizado para ${VERSION}`, `Lurk updated to ${VERSION}`), { type: "success" });
-  const close = safe(() => UI.showNotice(L(`O Lurk foi atualizado para ${VERSION}.`, `Lurk was updated to ${VERSION}.`), { type: "success", timeout: 0, buttons: [
+  if (mode === "never") return toast(L(`Lurk atualizado pra ${VERSION}`, `Lurk updated to ${VERSION}`), { type: "success" });
+  const close = safe(() => UI.showNotice(L(`O Lurk foi atualizado pra ${VERSION}.`, `Lurk was updated to ${VERSION}.`), { type: "success", timeout: 0, buttons: [
     { label: L("Ver novidades", "See what's new"), onClick: () => { safe(() => close?.()); showChangelog(last); } },
   ] }));
-  if (!close) toast(L(`Lurk atualizado para ${VERSION}`, `Lurk updated to ${VERSION}`), { type: "success" });
+  if (!close) toast(L(`Lurk atualizado pra ${VERSION}`, `Lurk updated to ${VERSION}`), { type: "success" });
 }
 
 function createBus() {
@@ -1017,7 +1018,7 @@ function MediaThumb({ uid, a, deleted }) {
     kind === "image" && src ? h("img", { src, alt: "", onError: () => (local ? null : setBroken(true)) })
       : kind === "video" && src ? h(React.Fragment, null, h("video", { src, muted: true, preload: "metadata", playsInline: true, onError: () => (local ? null : setBroken(true)) }), h("span", { className: "dmtt-media-play" }, h(SIcon, { d: "M8 5v14l11-7z", size: 18 })))
       : h("span", { className: "dmtt-media-file" }, h(SIcon, { d: SI.archive, size: 18 }), h("span", null, lost ? L("Indisponível", "Unavailable") : name)),
-    a.skipped === "size" && !full ? h("span", { className: "dmtt-media-note" }, L("Grande demais para salvar", "Too large to save")) : null);
+    a.skipped === "size" && !full ? h("span", { className: "dmtt-media-note" }, L("Grande demais pra salvar", "Too large to save")) : null);
 }
 function MediaStrip({ m }) {
   const list = (m.attachments || []).filter((a) => a && (a.url || a.local || a.proxy));
@@ -1056,7 +1057,7 @@ function MediaViewer() {
       it.full ? h("button", { className: "dmtt-viewer-btn", onClick: () => showInFolder(it.full) }, L("Mostrar na pasta", "Show in folder")) : null,
       h("button", { className: "dmtt-viewer-btn", onClick: closeViewer, "aria-label": L("Fechar", "Close") }, h(SIcon, { d: "M6 6l12 12M18 6L6 18", size: 16 }))),
     h("div", { className: "dmtt-viewer-stage", onClick: (e) => { if (e.target === e.currentTarget) closeViewer(); } },
-      !src ? h("div", { className: "dmtt-viewer-wait" }, it.full ? L("Carregando…", "Loading…") : L("Arquivo indisponível", "File unavailable"))
+      !src ? h("div", { className: "dmtt-viewer-wait" }, it.full ? L("Carregando…", "Loading…") : L("Este arquivo não foi salvo a tempo e o Discord já removeu o original.", "This file wasn't saved in time and Discord already removed the original."))
         : it.kind === "video" ? h("video", { ref: mediaRef, src, controls: true, autoPlay: true, playsInline: true })
         : h("img", { ref: mediaRef, src, alt: "" })));
   return box;
@@ -3643,7 +3644,7 @@ const NAMES = {
   spam: () => "Spam",
   typing: () => L("Digitou e apagou", "Typed & quit"),
   mentions: () => L("Menções", "Mentions"),
-  contacts: () => L("Novos contatos", "New contacts"),
+  contacts: () => L("Desconhecidos", "Strangers"),
   snipe: () => L("Histórico VIP", "VIP history"),
   vip: () => L("Lista VIP", "VIP list"),
   calls: () => L("Tempo em call", "Call time"),
@@ -3966,7 +3967,7 @@ function MessageCard({ avatar, name, action, meta, time, body, bodyTone, extra, 
       onDelete ? h("button", { className: "dmtt-del", title: L("Excluir", "Delete"), onClick: onDelete }, h(Icon, { d: ICON_X, size: 12 })) : null),
     body ? h("div", { className: `dmtt-bubble ${bodyTone ? `is-${bodyTone}` : ""}`, onClick: long ? () => setOpen(!open) : undefined, role: long ? "button" : undefined, tabIndex: long ? 0 : undefined, "aria-expanded": long ? open : undefined, onKeyDown: long ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } } : undefined, style: long ? { cursor: "pointer" } : null }, long && !open ? `${body.slice(0, 160)}…` : body) : null,
     extra || null,
-    onJump ? h("button", { className: "dmtt-link", onClick: onJump }, L("Ir para mensagem", "Jump to message")) : null);
+    onJump ? h("button", { className: "dmtt-link", onClick: onJump }, L("Ir pra mensagem", "Jump to message")) : null);
 }
 function MentionsScreen({ initial = "all" }) {
   useBus(mentionBus, settingsBus);
@@ -4101,8 +4102,8 @@ function RequestActions({ r }) {
         return;
       }
       Logger.error("friend request", e);
-      const msg = e?.captcha ? L("O Discord pediu uma verificação. Abra o perfil da pessoa para responder ao pedido.", "Discord asked for a verification. Open the person's profile to respond to the request.")
-        : e?.status === 429 ? L("O Discord pediu para esperar um pouco. Tente de novo em instantes.", "Discord asked to wait a bit. Try again in a moment.")
+      const msg = e?.captcha ? L("O Discord pediu uma verificação. Abra o perfil da pessoa pra responder ao pedido.", "Discord asked for a verification. Open the person's profile to respond to the request.")
+        : e?.status === 429 ? L("O Discord pediu pra esperar um pouco. Tente de novo em instantes.", "Discord asked to wait a bit. Try again in a moment.")
         : accept ? L("Não foi possível aceitar o pedido.", "Couldn't accept the request.") : L("Não foi possível recusar o pedido.", "Couldn't decline the request.");
       toast(msg, { type: "error" });
       setBusy(null);
@@ -4247,12 +4248,12 @@ function SpamFilterScreen() {
   const toggle = (id) => saveSpamGuilds(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
   const iconOf = (g) => (g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.webp?size=64` : null);
   return h(React.Fragment, null,
-    h(LargeTitle, { title: NAMES.spamFilter(), subtitle: L("O que cair aqui vai para Spam em vez de aparecer nos novos pedidos", "Anything caught here goes to Spam instead of New requests") }),
+    h(LargeTitle, { title: NAMES.spamFilter(), subtitle: L("O que cair aqui vai pra Spam em vez de aparecer nos novos pedidos", "Anything caught here goes to Spam instead of New requests") }),
     h(Group, { header: L("Pedidos repetidos", "Repeat requests"), footer: L("Quem você já recusou antes e mandou pedido de novo.", "People you declined before who sent a request again.") },
-      h(SettingRow, { item: sw("spamDeclined", L("Mandar quem eu já recusei para Spam", "Move people I declined to Spam")) })),
+      h(SettingRow, { item: sw("spamDeclined", L("Mandar quem eu já recusei pra Spam", "Move people I declined to Spam")) })),
     h(Group, { header: L("Possíveis bots", "Possible bots"), footer: L(`Conta com até ${getSettings().friendsBotDays} dias, sem amigos em comum, sem contas conectadas e sem Nitro.`, `Account up to ${getSettings().friendsBotDays} days old, with no mutual friends, no connected accounts and no Nitro.`) },
-      h(SettingRow, { item: sw("spamHideBots", L("Mandar possíveis bots para Spam", "Move possible bots to Spam")) })),
-    h(Group, { header: L(`Servidores ignorados${selected.length ? ` (${selected.length})` : ""}`, `Ignored servers${selected.length ? ` (${selected.length})` : ""}`), footer: L("Pedidos de quem está nesses servidores vão para Spam. Se a pessoa sair do servidor depois de mandar o pedido, ela continua no Spam.", "Requests from people in these servers go to Spam. If they leave the server after sending the request, they stay in Spam.") },
+      h(SettingRow, { item: sw("spamHideBots", L("Mandar possíveis bots pra Spam", "Move possible bots to Spam")) })),
+    h(Group, { header: L(`Servidores ignorados${selected.length ? ` (${selected.length})` : ""}`, `Ignored servers${selected.length ? ` (${selected.length})` : ""}`), footer: L("Pedidos de quem está nesses servidores vão pra Spam. Se a pessoa sair do servidor depois de mandar o pedido, ela continua no Spam.", "Requests from people in these servers go to Spam. If they leave the server after sending the request, they stay in Spam.") },
       h("div", { className: "dmtt-row dmtt-row-search" }, h(Search, { value: q, onChange: setQ, placeholder: L("Buscar servidor pelo nome", "Search servers by name") })),
       list.slice(0, 200).map((g) => h("button", { key: g.id, className: "dmtt-row", onClick: () => toggle(g.id) },
         iconOf(g) ? h("img", { className: "dmtt-guild-ic", src: iconOf(g), alt: "" }) : h("span", { className: "dmtt-guild-ic is-text" }, (g.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 3)),
@@ -4297,7 +4298,7 @@ function ProfileFeed({ userId }) {
   const watch = getProfileWatch();
   const watchName = watch && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
   return h(React.Fragment, null,
-    !userId ? h(Group, { footer: watchName ? L(`Nome, @ e foto são registrados para todos os VIPs. Contas conectadas, bio, pronomes e banner só de ${watchName}, conferido a cada 15 minutos.`, `Name, username and avatar are logged for every VIP. Connected accounts, bio, pronouns and banner only for ${watchName}, checked every 15 minutes.`) : L("Nome, @ e foto são registrados para todos os VIPs. Para ver também contas conectadas, bio, pronomes e banner, ligue \"Monitorar perfil\" no perfil de um VIP.", "Name, username and avatar are logged for every VIP. To also see connected accounts, bio, pronouns and banner, turn on \"Watch profile\" on a VIP's page.") }) : null,
+    !userId ? h(Group, { footer: watchName ? L(`Nome, @ e foto são registrados pra todos os VIPs. Contas conectadas, bio, pronomes e banner só de ${watchName}, conferido a cada 15 minutos.`, `Name, username and avatar are logged for every VIP. Connected accounts, bio, pronouns and banner only for ${watchName}, checked every 15 minutes.`) : L("Nome, @ e foto são registrados pra todos os VIPs. Pra ver também contas conectadas, bio, pronomes e banner, ligue \"Monitorar perfil\" no perfil de um VIP.", "Name, username and avatar are logged for every VIP. To also see connected accounts, bio, pronouns and banner, turn on \"Watch profile\" on a VIP's page.") }) : null,
     list.length ? h(DayList, { items: list, getTime: (e) => e.at, render: (e, i) => h(Flash, { key: `${e.at}-${i}`, isNew: e.at > seen }, h(ProfileChangeRow, { e, isNew: false, showName: !userId })) })
       : h(Empty, { icon: "star", title: L("Nenhuma mudança de perfil ainda", "No profile changes yet") }));
 }
@@ -4400,7 +4401,7 @@ function VipPeopleList() {
   const today = startOfDay(Date.now());
   const ids = Object.keys(list).sort((a, b) => onlineMs(b, d.events, today) - onlineMs(a, d.events, today));
   return h(React.Fragment, null,
-    h(Group, { footer: L("O tempo online de hoje aparece à direita quando a pessoa ficou online desde a meia-noite (contado enquanto o Discord e o Lurk estavam abertos). Toque numa pessoa para ver o histórico completo.", "Today's time online shows on the right when the person was online since midnight (counted while Discord and Lurk were open). Tap a person for their full history.") },
+    h(Group, { footer: L("O tempo online de hoje aparece à direita quando a pessoa ficou online desde a meia-noite (contado enquanto o Discord e o Lurk estavam abertos). Toque numa pessoa pra ver o histórico completo.", "Today's time online shows on the right when the person was online since midnight (counted while Discord and Lurk were open). Tap a person for their full history.") },
       ids.map((id) => {
         const { p, friend, status } = vipStatusNow(id);
         const ms = onlineMs(id, d.events, today);
@@ -4532,7 +4533,7 @@ function MessagesFeed({ channelId }) {
   if (!vips) return null;
   if (!getSettings().vipRecordMessages) {
     return h(React.Fragment, null,
-      h(Group, { footer: L("Para ver o que os VIPs apagam e editam, o registro de mensagens precisa estar ligado.", "To see what VIPs delete and edit, message logging needs to be on.") },
+      h(Group, { footer: L("Pra ver o que os VIPs apagam e editam, o registro de mensagens precisa estar ligado.", "To see what VIPs delete and edit, message logging needs to be on.") },
         h(NavRow, { icon: "star", color: "#ffcc00", title: L("Ligar registro de mensagens", "Turn on message logging"), onClick: () => nav.push({ type: "settingsPage", id: "vip" }) })));
   }
   const ch = channelId ? ChannelStore?.getChannel?.(channelId) : null;
@@ -4622,7 +4623,7 @@ function VipAddById({ onAdded }) {
     if (r.ok) { setValue(""); setMsg({ ok: true, text: L(`${r.name} entrou na Lista VIP.`, `${r.name} was added to your VIP list.`) }); onAdded?.(r.id); }
     else setMsg({ ok: false, text: r.msg });
   };
-  return h(Group, { header: L("Adicionar por ID", "Add by ID"), footer: msg ? null : L("Cole o ID do Discord da pessoa (Configurações → Avançado → Modo desenvolvedor, depois botão direito → Copiar ID). Também aceita menção ou link do perfil.", "Paste the person's Discord ID (Settings → Advanced → Developer Mode, then right-click → Copy User ID). A mention or profile link works too.") },
+  return h(Group, { header: L("Adicionar por ID", "Add by ID"), footer: msg ? null : L("Cole o ID do Discord da pessoa (Configurações › Avançado › Modo desenvolvedor, depois botão direito › Copiar ID). Também aceita menção ou link do perfil.", "Paste the person's Discord ID (Settings › Advanced › Developer Mode, then right-click › Copy User ID). A mention or profile link works too.") },
     h("div", { className: "dmtt-row dmtt-addid" },
       h("input", { className: "dmtt-text", value, placeholder: L("ID do Discord", "Discord user ID"), onChange: (e) => { setValue(e.target.value); setMsg(null); }, onKeyDown: (e) => { if (e.key === "Enter") submit(); } }),
       h("button", { className: "dmtt-btn-primary", disabled: busy || !value.trim(), onClick: submit }, busy ? L("Buscando…", "Looking up…") : L("Adicionar", "Add"))),
@@ -4639,7 +4640,7 @@ function VipScreen() {
   const all = Object.keys(list);
   if (!all.length) {
     return h(React.Fragment, null, h(LargeTitle, { title: NAMES.vip() }),
-      h(Empty, { icon: "star", title: L("Sua Lista VIP está vazia", "Your VIP list is empty") }, L("Adicione pelo ID abaixo ou clicando com o botão direito em alguém → \"Lista VIP\". Você passa a ver quando a pessoa fica online, offline ou invisível, as calls, e o que ela manda, edita e apaga.", "Add someone by ID below, or right-click a person → \"VIP list\". You'll see when they go online, offline or invisible, their calls, and what they send, edit and delete.")),
+      h(Empty, { icon: "star", title: L("Sua Lista VIP está vazia", "Your VIP list is empty") }, L("Adicione pelo ID abaixo ou pelo botão direito em alguém › Lista VIP. Você passa a ver status, calls e o que a pessoa manda, edita e apaga.", "Add someone by ID below or right-click a person › VIP list. You'll see their status, calls and what they send, edit and delete.")),
       h(VipAddById, { onAdded: (id) => nav.push({ type: "vipPerson", userId: id }) }));
   }
   let ids = all;
@@ -4665,7 +4666,7 @@ function VipScreen() {
       return h(NavRow, { key: id, avatar: h(Avatar, { userId: id, status }), title: nameOf(id, list[id]), subtitle: joinNodes(sub), onClick: () => nav.push({ type: "vipPerson", userId: id }) });
     })),
     h(VipAddById, null),
-    h("div", { className: "dmtt-sec-f" }, L("Também dá pra adicionar com o botão direito na pessoa → Lista VIP.", "You can also right-click a person → VIP list.")));
+    h("div", { className: "dmtt-sec-f" }, L("Também dá pra adicionar pelo botão direito na pessoa › Lista VIP.", "You can also right-click a person › VIP list.")));
 }
 
 const PRESENCE_VERB = labelMap(
@@ -4721,7 +4722,7 @@ function MessageEntry({ m, body, edited, who }) {
     body ? h("div", { className: `dmtt-bubble ${m.deletedAt ? "is-deleted" : ""}` }, body) : null,
     h(MediaStrip, { m }),
     open ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Original: ", "Original: ")), m.content || NO_TEXT()), m.edits.map((e, i) => h("div", { key: i }, h("b", null, `${fmtHM(e.at)}: `), e.content || NO_TEXT()))) : null,
-    !m.deletedAt ? h("button", { className: "dmtt-link", onClick: () => jumpTo(m.guildId, m.channelId, m.id) }, L("Ir para mensagem", "Jump to message")) : null);
+    !m.deletedAt ? h("button", { className: "dmtt-link", onClick: () => jumpTo(m.guildId, m.channelId, m.id) }, L("Ir pra mensagem", "Jump to message")) : null);
 }
 
 function PeerStack({ peers, max = 4 }) {
@@ -4811,7 +4812,7 @@ function VoiceList({ id, sessions: list }) {
   const [liveOpen, setLiveOpen] = React.useState(true);
   const live = vipVoice.get(id);
   const mine = list.filter((v) => v.userId === id);
-  if (!getSettings().vipTrackVoice && !mine.length) return h(Empty, { icon: "headset", title: L("Registro de calls desligado", "Call tracking is off") }, L("Ative em Ajustes → Lista VIP.", "Turn it on in Settings → VIP list."));
+  if (!getSettings().vipTrackVoice && !mine.length) return h(Empty, { icon: "headset", title: L("Registro de calls desligado", "Call tracking is off") }, L("Ative em Ajustes › Lista VIP.", "Turn it on in Settings › VIP list."));
   const livePeers = live ? [...new Set([...live.peers, ...usersInChannel(live.channelId)])].filter((pid) => pid !== id).map((pid) => ({ id: pid, name: nameOf(pid) })) : [];
   const total = mine.reduce((n, v) => n + (v.leftAt - v.joinedAt), 0);
   return h(React.Fragment, null,
@@ -5064,7 +5065,7 @@ function VipNotesScreen({ userId: id }) {
       notes.map((n) => h("div", { key: n.id, className: "dmtt-row dmtt-note" },
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-note-text" }, n.text), h("span", { className: "dmtt-row-sub" }, `${fmtDateOnly(n.at)} ${fmtHM(n.at)}`)),
         h("button", { className: "dmtt-del", title: L("Apagar nota", "Delete note"), onClick: () => confirmDanger(L("Apagar nota", "Delete note"), L("Apagar esta nota?", "Delete this note?"), () => deleteNote(id, n.id)) }, h(Icon, { d: ICON_X, size: 12 }))))),
-    h(Group, { header: L("Datas importantes", "Important dates"), footer: when ? L(`Você recebe um aviso no dia, às ${when}. Mude em Ajustes › Lista VIP.`, `You get a notification on the day, at ${when}. Change it in Settings › VIP list.`) : L("Você recebe um aviso no dia, ao abrir o Discord ou à meia-noite se ele já estiver aberto. Dá para escolher um horário em Ajustes › Lista VIP.", "You get a notification on the day, when you open Discord or at midnight if it's already open. You can pick a time in Settings › VIP list.") },
+    h(Group, { header: L("Datas importantes", "Important dates"), footer: when ? L(`Você recebe um aviso no dia, às ${when}. Mude em Ajustes › Lista VIP.`, `You get a notification on the day, at ${when}. Change it in Settings › VIP list.`) : L("Você recebe um aviso no dia, ao abrir o Discord ou à meia-noite se ele já estiver aberto. Dá pra escolher um horário em Ajustes › Lista VIP.", "You get a notification on the day, when you open Discord or at midnight if it's already open. You can pick a time in Settings › VIP list.") },
       h(BirthdayRow, { id }),
       h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Amigos desde", "Friends since")), since ? h("span", { className: "dmtt-row-sub" }, L("Avisa no aniversário da amizade", "Notifies on your friendship anniversary")) : null),
         h("span", { className: "dmtt-row-detail" }, since ? `${fmtDateOnly(since)}${years ? L(` · ${years} ${plural(years, "ano", "anos")}`, ` · ${years} ${plural(years, "year", "years")}`) : ""}` : L("Não são amigos no Discord", "Not friends on Discord"))),
@@ -5101,7 +5102,7 @@ function VipPersonScreen({ userId: id }) {
   const { p, friend, status } = vipStatusNow(id);
   const typing = getHistory().filter((r) => r.userId === id).sort((a, b) => b.lastTypingAt - a.lastTypingAt);
   const mine = d.messages.filter((m) => m.userId === id);
-  const invis = d.events.filter((e) => e.userId === id && e.type === "invisible").length;
+  const invis = d.events.filter((e) => e.userId === id && e.type === "invisible" && e.at >= startOfDay(Date.now())).length;
   const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
   const dm = ChannelStore?.getDMFromUserId?.(id);
   const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
@@ -5112,7 +5113,7 @@ function VipPersonScreen({ userId: id }) {
       h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.gallery, size: 18 }), label: L("Galeria", "Gallery"), onClick: () => nav.push({ type: "vipGallery", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) })),
-    h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível", "invisible")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
+    h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível hoje", "invisible today")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
     h(Segmented, { value: tab, onChange: setTab, options: [topt("activity", L("Atividade", "Activity")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
     tab === "profile" ? h(ProfileFeed, { userId: id })
@@ -5203,9 +5204,9 @@ function settingsPages() {
       custom: () => h(SoundExtras) },
     { id: "discreet", title: L("Modo discreto", "Discreet mode"), icon: "eye", color: "#636366", summary: () => (discreetActive() ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [
-        { footer: L("Esconde os botões do Lurk, os contadores, a foto de quem está digitando e o \"offline há…\", e silencia os avisos. O Lurk continua registrando tudo; para abrir, use Ajustes › Plugins.", "Hides Lurk's buttons, counters, the typing avatar and \"offline for…\", and silences notifications. Lurk keeps logging everything; open it from Settings › Plugins."),
+        { footer: L("Esconde os botões do Lurk, os contadores, a foto de quem está digitando e o \"offline há…\", e silencia os avisos. O Lurk continua registrando tudo; pra abrir, use Ajustes › Plugins.", "Hides Lurk's buttons, counters, the typing avatar and \"offline for…\", and silences notifications. Lurk keeps logging everything; open it from Settings › Plugins."),
           items: [{ ...sw("discreet", L("Modo discreto", "Discreet mode")), after: () => syncDOM() }] },
-        { title: L("Automático", "Automatic"), items: [{ ...sw("discreetAuto", L("Ligar ao transmitir a tela", "Turn on while sharing my screen"), L("Liga sozinho enquanto você transmite a tela numa call e desliga quando você para.", "Turns on while you're sharing your screen in a call and off when you stop.")), after: () => { safe(() => checkMyStream()); syncDOM(); } }] },
+        { title: L("Automático", "Automatic"), items: [{ ...sw("discreetAuto", L("Ligar ao transmitir a tela", "Turn on while sharing my screen"), L("Liga sozinho enquanto você transmite a tela numa call e desliga quando você pra.", "Turns on while you're sharing your screen in a call and off when you stop.")), after: () => { safe(() => checkMyStream()); syncDOM(); } }] },
       ], custom: () => h(ShortcutRow) },
     { id: "focus", title: L("Modo foco", "Focus mode"), icon: "moon", color: "#5856d6", summary: () => (getSettings().focusMode ? L("Ligado", "On") : L("Desligado", "Off")),
       sections: [{ footer: L("Silencia os avisos do Lurk nessas situações. Tudo continua sendo registrado.", "Silences Lurk notifications in these situations. Everything is still logged."),
@@ -5215,7 +5216,7 @@ function settingsPages() {
         { title: L("Monitorar", "Track"), items: [
           sw("trackGroupDMs", L("DMs em grupo", "Group DMs")),
           sw("trackUnknownChannels", L("DMs ocultas", "Hidden DMs"), L("DMs que você fechou ou que nunca abriu, incluindo quem não é seu amigo.", "DMs you closed or never opened, including people who aren't your friends.")),
-          sw("recordPresence", L("Registrar status da pessoa", "Log the person's status"), L("Online, ausente, invisível e o dispositivo. Invisível só é confirmado para amigos.", "Online, idle, invisible and the device. Invisible can only be confirmed for friends."))] },
+          sw("recordPresence", L("Registrar status da pessoa", "Log the person's status"), L("Online, ausente, invisível e o dispositivo. Invisível só é confirmado pra amigos.", "Online, idle, invisible and the device. Invisible can only be confirmed for friends."))] },
         { title: L("Registro", "Logging"), footer: L("O Discord só manda o sinal de digitação a cada ~10 s, então as durações são aproximadas.", "Discord only sends the typing signal every ~10 s, so durations are approximate."), items: [
           num("mergeWindow", L("Juntar tentativas em até", "Merge attempts within"), 0, 3600, 5, "s"),
           num("minDuration", L("Ignorar digitação menor que", "Ignore typing shorter than"), 0, 600, 1, "s"),
@@ -5240,11 +5241,11 @@ function settingsPages() {
         { title: L("Servidores", "Servers"), items: [
           { ...sw("vipTrackServers", L("Digitou e apagou nos servidores", "Typed & quit in servers"), L("Experimental e com risco. Fica desligado por padrão.", "Experimental and risky. Off by default.")), after: (v) => v && scheduleSubscribe(),
             confirmOn: { title: () => L("Digitou e apagou nos servidores", "Typed & quit in servers"), confirm: () => L("Ligar mesmo assim", "Turn on anyway"),
-              text: () => L("Para ver quem digita nos servidores, o Lurk pede ao Discord a digitação de todos os servidores que você tem em comum com seus VIPs a cada 2 minutos, e busca o perfil deles de tempos em tempos. O Discord não faz isso sozinho, então esse padrão pode parecer automação e, no pior caso, levar a restrições na sua conta. Quanto mais VIPs, maior o uso. Use com moderação. Mensagens enviadas, editadas e apagadas nos servidores continuam sendo registradas sem isto.", "To see who types in servers, Lurk asks Discord for typing in every server you share with your VIPs every 2 minutes, and loads their profiles from time to time. Discord doesn't do this on its own, so the pattern can look like automation and, in the worst case, lead to restrictions on your account. The more VIPs, the more it's used. Use it sparingly. Messages sent, edited and deleted in servers are still logged without it.") } },
+              text: () => L("Pra ver quem digita nos servidores, o Lurk pede ao Discord, a cada 2 minutos, a digitação de todos os servidores em comum com seus VIPs. O Discord não faz isso sozinho: pode parecer automação e, no pior caso, levar a restrições na conta. As mensagens nos servidores continuam sendo salvas sem isso.", "To see who types in servers, Lurk asks Discord every 2 minutes for typing in every server you share with your VIPs. Discord doesn't do this on its own: it can look like automation and, at worst, lead to restrictions on your account. Server messages are still saved without it.") } },
           { ...sw("vipSubscribeTyping", L("Acompanhar todos os servidores em comum", "Watch all shared servers"), L("Experimental. Sem isto o Discord só avisa digitação dos servidores que você abriu.", "Experimental. Without it, Discord only reports typing in servers you've opened.")), after: (v) => v && scheduleSubscribe(), showIf: (st) => st.vipTrackServers },
           sw("vipRecordMessages", L("Registrar mensagens", "Log messages"), L("Texto e anexos, incluindo editadas e apagadas.", "Text and attachments, including edits and deletions.")),
           sw("vipRecordDMs", L("Incluir mensagens no privado", "Include DMs"))] },
-        { title: L("Fotos e vídeos", "Photos and videos"), footer: L("Fotos, vídeos, GIFs e outros anexos dos VIPs, além das fotos de perfil e banners, ficam salvos na pasta LurkMedia, separados por pessoa. Quando a pasta passa do limite, os arquivos mais antigos são apagados primeiro. Fotos de perfil e banners têm um limite próprio e ficam guardados com todo o histórico na subpasta Perfil de cada pessoa; quando passam do limite, saem os mais antigos, mas a foto atual de cada um nunca é apagada.", "VIPs' photos, videos, GIFs and other attachments, plus avatars and banners, are saved in the LurkMedia folder, one folder per person. When the folder goes over the limit, the oldest files are deleted first. Avatars and banners have their own limit and keep their full history in each person's Perfil folder; when they go over it, the oldest go first, but nobody's current one is ever deleted."), items: [
+        { title: L("Fotos e vídeos", "Photos and videos"), footer: L("Fotos, vídeos e anexos dos VIPs ficam na pasta LurkMedia, uma pasta por pessoa. Quando passa do limite, os mais antigos saem primeiro. Fotos de perfil e banners têm limite próprio, guardam todo o histórico e a atual nunca é apagada.", "VIPs' photos, videos and attachments go in the LurkMedia folder, one folder per person. Over the limit, the oldest go first. Avatars and banners have their own limit, keep their full history and the current one is never deleted."), items: [
           { ...sw("mediaSave", L("Salvar fotos e vídeos", "Save photos and videos")), after: (v) => v && safe(() => checkIdentities(false)) },
           { ...num("mediaMaxTotalMB", L("Tamanho máximo da pasta", "Maximum folder size"), 100, 50000, 100, "MB"), after: () => scheduleMediaLimit() },
           num("mediaMaxFileMB", L("Tamanho máximo por arquivo", "Maximum size per file"), 1, 500, 5, "MB"),
@@ -5260,10 +5261,13 @@ function settingsPages() {
           { ...sw("vipLastSeenMembers", L("Na lista de membros dos servidores", "In server member lists")), after: () => syncDOM() }] },
         { title: "Calls", items: [sw("vipTrackVoice", L("Registrar calls dos VIPs", "Log VIP calls"), L("Canal, quem estava, quanto tempo, mute e transmissão.", "Channel, who was there, how long, mute and screen share."))] },
       ], custom: () => h(VipAddById, null) },
-    { id: "calls", title: L("Calls e apagadas", "Calls & deleted"), icon: "headset", color: "#bf5af2",
+    { id: "calls", title: NAMES.calls(), icon: "headset", color: "#bf5af2",
       sections: [
-        { title: NAMES.calls(), items: [sw("trackMyCalls", L("Contar tempo em call com cada pessoa", "Track call time with each person"))] },
-        { title: NAMES.snipe(), footer: L("Mostra o que as pessoas da Lista VIP apagam ou editam, no privado e nos servidores. Usa o registro de mensagens da Lista VIP.", "Shows what people on your VIP list delete or edit, in DMs and servers. Uses the VIP list's message logging."), items: [{ ...sw("showSnipeButton", L("Botão de histórico no topo", "History button in the top bar")), after: () => syncDOM() }] },
+        { items: [sw("trackMyCalls", L("Contar tempo em call com cada pessoa", "Track call time with each person"))] },
+      ] },
+    { id: "historico", title: NAMES.snipe(), icon: "clock", color: "#ff453a",
+      sections: [
+        { footer: L("Mostra o que as pessoas da Lista VIP apagam ou editam, no privado e nos servidores. Usa o registro de mensagens da Lista VIP.", "Shows what people on your VIP list delete or edit, in DMs and servers. Uses the VIP list's message logging."), items: [{ ...sw("showSnipeButton", L("Botão de histórico no topo", "History button in the top bar")), after: () => syncDOM() }] },
       ] },
     { id: "barra", title: L("Barra de servidores", "Server sidebar"), icon: "sidebar", color: "#5e5ce6",
       sections: [{ footer: L("A foto de quem está digitando aparece no topo das DMs, abaixo do botão do Discord, com o indicador por cima.", "The typer's avatar shows at the top of your DMs, below the Discord button, with the typing indicator on top."), items: [
@@ -5281,14 +5285,14 @@ function settingsPages() {
       sections: [
         { footer: L("Mostra um botão no topo com os pedidos de amizade pendentes e quem te removeu da lista de amigos. Não manda aviso, só o contador vermelho.", "Adds a top bar button with your pending friend requests and who removed you as a friend. No notifications, just the red counter."),
           items: [{ ...sw("friendsEnabled", L("Ativar Amigos", "Turn on Friends")), after: (v) => { if (v) safe(() => initFriends()); syncDOM(); } }] },
-        { title: L("Etiquetas", "Tags"), footer: L("\"Possível bot\": conta nova, sem amigos em comum, sem contas conectadas e sem Nitro. As etiquetas não escondem ninguém; para isso use o Filtro anti-spam.", "\"Possible bot\": a new account with no mutual friends, no connected accounts and no Nitro. Tags don't hide anyone; use the Spam filter for that."),
+        { title: L("Etiquetas", "Tags"), footer: L("\"Possível bot\": conta nova, sem amigos em comum, sem contas conectadas e sem Nitro. As etiquetas não escondem ninguém; pra isso use o Filtro anti-spam.", "\"Possible bot\": a new account with no mutual friends, no connected accounts and no Nitro. Tags don't hide anyone; use the Spam filter for that."),
           items: [num("friendsNewDays", L("\"Conta nova\" até", "\"New account\" up to"), 1, 3650, 1, L("dias", "days")), num("friendsBotDays", L("\"Possível bot\" até", "\"Possible bot\" up to"), 1, 3650, 1, L("dias", "days"))] },
       ] },
     { id: "storage", title: L("Armazenamento", "Storage"), icon: "storage", color: "#30b0c7", summary: () => { const n = getArchives().length; return n ? L(`${n} ${plural(n, "arquivo", "arquivos")}`, `${n} ${plural(n, "archive", "archives")}`) : ""; },
       sections: [
-        { title: L("Mensagens dos VIPs", "VIP messages"), footer: L(`Ao passar do limite, a metade mais antiga vai para o arquivo morto (pasta ${ARCHIVE_DIR}). Nada é apagado. Links de anexos do Discord expiram depois de um tempo.`, `When the limit is reached, the oldest half moves to the archive (${ARCHIVE_DIR} folder). Nothing is deleted. Discord attachment links expire after a while.`),
+        { title: L("Mensagens dos VIPs", "VIP messages"), footer: L(`Ao passar do limite, a metade mais antiga vai pra o arquivo morto (pasta ${ARCHIVE_DIR}). Nada é apagado. Links de anexos do Discord expiram depois de um tempo.`, `When the limit is reached, the oldest half moves to the archive (${ARCHIVE_DIR} folder). Nothing is deleted. Discord attachment links expire after a while.`),
           items: [{ ...num("vipMaxMessages", L("Guardar até", "Keep up to"), 200, 20000, 100, L("mensagens", "messages")), after: () => safe(() => enforceLimits()) }] },
-        { title: L("Apagados ao passar do limite", "Deleted past the limit"), footer: L("Os mais antigos são apagados sozinhos. O tempo total em call com cada pessoa é guardado para sempre.", "The oldest entries are deleted automatically. Your total call time with each person is kept forever."),
+        { title: L("Apagados ao passar do limite", "Deleted past the limit"), footer: L("Os mais antigos são apagados sozinhos. O tempo total em call com cada pessoa é guardado pra sempre.", "The oldest entries are deleted automatically. Your total call time with each person is kept forever."),
           items: [
             { ...num("maxEntries", NAMES.typing(), 50, 20000, 50, L("registros", "records")), after: () => safe(() => enforceLimits()) },
             { ...num("vipMaxEvents", L("Status dos VIPs", "VIP statuses"), 100, 20000, 100, L("registros", "records")), after: () => safe(() => enforceLimits()) },
@@ -5298,13 +5302,13 @@ function settingsPages() {
       ], custom: () => h(StorageArchiveLink) },
     { id: "updates", title: L("Atualizações", "Updates"), icon: "refresh", color: "#34c759", summary: () => VERSION,
       sections: [
-        { title: L("Depois de atualizar", "After updating"), footer: L("O Lurk procura e instala versões novas sozinho ao abrir o Discord e a cada 6 horas, para que correções cheguem a todo mundo.", "Lurk finds and installs new versions on its own when Discord starts and every 6 hours, so fixes reach everyone."), items: [{ id: "changelogMode", label: L("Novidades da versão", "What's new"), type: "select", options: [["ask", L("Perguntar se quero ver", "Ask me")], ["always", L("Mostrar sempre", "Always show")], ["never", L("Não mostrar", "Don't show")]] }] },
+        { title: L("Depois de atualizar", "After updating"), footer: L("O Lurk procura e instala versões novas sozinho ao abrir o Discord e a cada 6 horas, pra que correções cheguem a todo mundo.", "Lurk finds and installs new versions on its own when Discord starts and every 6 hours, so fixes reach everyone."), items: [{ id: "changelogMode", label: L("Novidades da versão", "What's new"), type: "select", options: [["ask", L("Perguntar se quero ver", "Ask me")], ["always", L("Mostrar sempre", "Always show")], ["never", L("Não mostrar", "Don't show")]] }] },
       ], custom: () => h(UpdateSection) },
     { id: "backup", title: "Backup", icon: "archive", color: "#32ade6", summary: () => { const b = getBackups()[0]; return b ? relTime(b.at) : L("Nenhum", "None"); },
       sections: [{ items: [sw("backupEnabled", L("Backup automático", "Automatic backup")), num("backupDays", L("A cada", "Every"), 1, 60, 1, L("dias", "days")), num("backupKeep", L("Guardar", "Keep"), 1, 10, 1, L("cópias", "copies"))] }], custom: () => h(BackupSection) },
   ];
 }
-const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "contatos", "friends", "vip", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
+const SETTINGS_GROUPS = [["language", "alerts", "sound", "focus", "discreet"], ["privado", "mentions", "contatos", "friends", "vip", "historico", "calls"], ["barra", "button", "ignored", "storage", "backup", "updates"]];
 
 function SettingsScreen() {
   useBus(settingsBus, vipBus, backupBus, historyBus);
@@ -5424,7 +5428,7 @@ function IgnoredList() {
         e.type === "users" ? h(Avatar, { userId: e.id, size: 30 }) : h(IconTile, { name: "userPlus", color: "#8e8e93", size: 30 }),
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, e.label), h("span", { className: "dmtt-row-sub" }, e.sub)),
         h("button", { className: "dmtt-link", onClick: () => toggleIgnore(e.type, e.id) }, L("Remover", "Remove")))))
-    : h(Empty, { icon: "ban", title: L("Ninguém ignorado", "No one ignored") }, L("Clique com o botão direito em uma pessoa ou grupo para ignorar.", "Right-click a person or group to ignore them."));
+    : h(Empty, { icon: "ban", title: L("Ninguém ignorado", "No one ignored") }, L("Clique com o botão direito em uma pessoa ou grupo pra ignorar.", "Right-click a person or group to ignore them."));
 }
 
 let appCloseBtn = null;
