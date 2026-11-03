@@ -60,6 +60,7 @@ const CHANGELOG = [
     ["improved", "Perfil do VIP mais enxuto: os botões agora são Mensagem, Rotina, Galeria e Notas, \"Monitorar perfil\" foi para dentro de \"Avisar quando\" e \"Remover da Lista VIP\" foi para o fim da página.", "Leaner VIP page: the buttons are now Message, Routine, Gallery and Notes, \"Watch profile\" moved into \"Notify me when\" and \"Remove from VIP list\" moved to the bottom of the page."],
     ["improved", "Filtros viraram etiquetas que nunca ficam cortadas, e quando uma aba com novidade está escondida aparece um aviso na borda.", "Filters are now chips that never get cut off, and a hidden tab with something new shows a dot at the edge."],
     ["improved", "Tela inicial: os cards deixam claro que contam o dia de hoje, e o de mensagens apagadas abre direto nas apagadas do Histórico VIP.", "Home: the cards make it clear they count today, and the deleted messages card opens straight to deleted messages in VIP history."],
+    ["improved", "Amigos › Te removeram: tocar no card abre a conversa com a pessoa.", "Friends › Removed you: tapping a card opens the DM with that person."],
     ["improved", "Dá para usar o Lurk pelo teclado com indicação de foco, as abas mudam com as setas, e números, botões e o mapa da Rotina ficaram mais legíveis.", "Lurk now works by keyboard with a visible focus ring, tabs switch with the arrow keys, and numbers, buttons and the Routine map are easier to read."],
 
     ["fixed", "Fotos de perfil, banners e fotos e vídeos salvos dos VIPs apareciam como \"?\" ou não abriam, mesmo estando salvos na pasta LurkMedia. Agora aparecem normalmente.", "VIPs' saved avatars, banners, photos and videos showed up as \"?\" or wouldn't open, even though they were saved in the LurkMedia folder. They show up normally now."],
@@ -4176,12 +4177,13 @@ function RequestRow({ r, isNew, showSpamWhy }) {
 function RemovedRow({ r, isNew }) {
   useTicker(30000);
   const flash = useFlash(isNew);
-  return h("div", { className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}` },
+  return h("button", { className: `dmtt-row dmtt-fr ${flash ? "is-flash" : ""}`, title: L("Abrir conversa", "Open DM"), onClick: () => openDM(null, r.userId, false) },
     h(Avatar, { userId: r.userId, url: r.avatarURL, size: 36 }),
     h("span", { className: "dmtt-row-main" },
       h("span", { className: "dmtt-row-title dmtt-fr-name" }, isNew ? h("span", { className: "dmtt-newdot", title: L("Novo", "New") }) : null, nameOf(r.userId, r), r.username ? h("span", { className: "dmtt-fr-user" }, `@${r.username}`) : null),
       h("span", { className: "dmtt-row-sub" }, r.away ? L("Te removeu enquanto seu Discord estava fechado", "Removed you while your Discord was closed") : L("Te removeu da lista de amigos", "Removed you as a friend"))),
-    h("span", { className: "dmtt-row-time", title: fmtDate(r.at) }, r.away ? L(`visto ${fmtAgo(r.at)}`, `noticed ${fmtAgo(r.at)}`) : fmtAgo(r.at)));
+    h("span", { className: "dmtt-row-time", title: fmtDate(r.at) }, r.away ? L(`visto ${fmtAgo(r.at)}`, `noticed ${fmtAgo(r.at)}`) : fmtAgo(r.at)),
+    h("span", { className: "dmtt-chev" }, h(Icon, { d: ICON_CHEVRON, size: 14 })));
 }
 function FriendsScreen({ tab: initialTab }) {
   useBus(friendsBus, settingsBus);
@@ -5869,6 +5871,7 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-app input::placeholder, .dmtt-app textarea::placeholder { color: var(--c-muted); opacity: 1; }
 .dmtt-flashwrap.is-flash .dmtt-row-sub, .dmtt-flashwrap.is-flash .dmtt-card-action, .dmtt-flashwrap.is-flash .dmtt-meta-line, .dmtt-flashwrap.is-flash .dmtt-row-time, .dmtt-fr.is-flash .dmtt-row-sub, .dmtt-fr.is-flash .dmtt-fr-user, .dmtt-fr.is-flash .dmtt-fr-time { color: #a8aeb6; }
 .dmtt-seg-wrap { position: relative; flex: none; }
+button.dmtt-fr > .dmtt-chev { align-self: center; }
 .dmtt-flashwrap.is-flash .dmtt-link, .dmtt-fr.is-flash .dmtt-link, .dmtt-fr.is-flash .dmtt-frbtn.is-plain { color: #4db3ff; }
 .dmtt-seg-alert { position: absolute; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: #e0281f; box-shadow: 0 0 0 2px var(--c-fill2); pointer-events: none; }
 .dmtt-seg-alert.is-right { right: 3px; }
