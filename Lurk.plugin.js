@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.10.3
+ * @version 2.11.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.10.3";
+const VERSION = "2.11.0";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,7 +51,13 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
-  { version: "2.10.3", items: [
+  { version: "2.11.0", items: [
+    ["new", "Lista VIP: botão Notas em cada VIP, com notas pessoais datadas e datas importantes (aniversário, desde quando são amigos e datas livres que podem repetir todo ano). No dia, o Lurk avisa ao abrir o Discord ou à meia-noite; dá para escolher um horário em Ajustes › Lista VIP.", "VIP list: a Notes button on each VIP with dated personal notes and important dates (birthday, how long you've been friends and custom dates that can repeat every year). On the day, Lurk notifies you when Discord opens or at midnight; you can pick a time in Settings › VIP list."],
+    ["new", "Lista VIP: botão Galeria com todas as fotos de perfil, banners, fotos e vídeos salvos de cada VIP, separados por data.", "VIP list: a Gallery button with every saved avatar, banner, photo and video of each VIP, grouped by date."],
+    ["new", "Lista VIP: avisos de fora do normal quando o VIP fica online numa hora em que quase nunca fica, ou fica online bem mais tempo que o normal. Liga e desliga por VIP em \"Avisar quando\".", "VIP list: out-of-the-ordinary alerts when a VIP comes online at a time they almost never are, or stays online far longer than usual. Turn them on or off per VIP under \"Notify me when\"."],
+    ["new", "Perfil do VIP: uma linha com o que esperar agora, como \"costuma sair por volta das 0h30\" ou \"provável voltar por volta das 19h\".", "VIP page: a line on what to expect right now, like \"usually leaves around 0:30\" or \"likely back around 19:00\"."],
+    ["new", "Rotina: quanto tempo o VIP e você costumam levar para responder no privado, e quanto tempo vocês ficam online juntos.", "Routine: how long the VIP and you usually take to reply in DMs, and how long you're online together."],
+
     ["fixed", "Fotos de perfil, banners e fotos e vídeos salvos dos VIPs apareciam como \"?\" ou não abriam, mesmo estando salvos na pasta LurkMedia. Agora aparecem normalmente.", "VIPs' saved avatars, banners, photos and videos showed up as \"?\" or wouldn't open, even though they were saved in the LurkMedia folder. They show up normally now."],
   ] },
   { version: "2.10.2", items: [
@@ -280,6 +286,7 @@ const DEFAULTS = {
   mediaMaxTotalMB: 2048,
   mediaMaxFileMB: 50,
   mediaMaxProfileMB: 500,
+  datesNotifyAt: "",
   vipMaxEvents: 2000,
   vipMaxVoice: 500,
   mentionMax: 1000,
@@ -613,7 +620,7 @@ function Flash({ isNew, children }) {
 }
 const MENTION_TYPES = ["ghost", "reply", "keyword", "reaction"];
 
-const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false };
+const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: true, notifyLong: true };
 const getVipList = () => Data.load(k("vip")) || {};
 const isVip = (id) => !!getVipList()[id];
 const vipFlag = (id, field) => { const e = getVipList()[id]; return !!e && (e[field] ?? VIP_DEFAULT[field]); };
@@ -1246,6 +1253,7 @@ const pad = (n) => String(n).padStart(2, "0");
 const fmtTime = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const fmtHM = (ms) => fmtTime(ms).slice(0, 5);
 const fmtDM = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}${d.getFullYear() !== new Date().getFullYear() ? `/${d.getFullYear()}` : ""} ${fmtHM(ms)}`; };
+const fmtDateOnly = (ms) => { const d = new Date(ms); return L(`${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`, `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()}`); };
 const fmtDate = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${fmtTime(ms)}`; };
 function fmtSecs(ms) {
   const s = Math.round(ms / 1000);
@@ -1596,6 +1604,10 @@ function onMessageCreate(action) {
     }
     const ch = ChannelStore?.getChannel?.(channelId);
     const gid = action.guildId || msg.guild_id || ch?.guild_id || null;
+    if (!gid && ch?.type === 1) {
+      const other = userId === myId() ? (ch.recipients || []).map((r) => (typeof r === "object" ? r?.id : r))[0] : userId;
+      if (other && isVip(other)) safe(() => recordReply(other, userId === myId(), Date.parse(msg.timestamp) || Date.now()));
+    }
     if (userId === myId()) {
       if (!gid && ch?.type === 1) (ch.recipients || []).forEach(rememberContact);
       return;
@@ -2199,6 +2211,7 @@ function onPresenceChange() {
       if (!prev || prev.status === p.status) continue;
       if (isOnlineStatus(prev.status) !== isOnlineStatus(p.status)) { markSeen2(id, isOnlineStatus(p.status)); seenChanged = true; }
       addVipEvent({ type: "presence", userId: id, at: Date.now(), from: prev.status, to: p.status, devices: p.devices });
+      if (prev.status === "offline") safe(() => checkOddHour(id));
       if (prev.status === "offline" && vipFlag(id, "notifyOnline")) {
         notify({
           title: L("Lista VIP", "VIP list"), text: L(`${nameOf(id, list[id])} ficou ${STATUS_PT[p.status] || p.status}`, `${nameOf(id, list[id])} is now ${STATUS_PT[p.status] || p.status}`) + (p.devices?.length ? ` (${fmtDevices(p.devices)})` : ""),
@@ -2796,7 +2809,165 @@ function computeRoutine({ now, weeks: u, cov, dev, talkTimes, presence }) {
   const days = [...perDay.values()];
   const firstOn = days.length >= 3 ? median(days.map((d) => d.first)) : null;
   const lastOff = days.length >= 3 ? median(days.map((d) => d.last)) : null;
-  return { sum, weeks, total, hours, daysTot, coveredDays, thisWeek, prevSame, chance, talk, devP, devM, firstOn, lastOff };
+  const dayMinutes = (back) => {
+    const start = startOfDay(now) - back * DAY;
+    const wd = (new Date(start).getDay() + 6) % 7;
+    return (u[String(weekStartOf(start))] || []).slice(wd * 24, wd * 24 + 24).reduce((a, b) => a + b, 0);
+  };
+  const togetherToday = dayMinutes(0);
+  const togetherWeek = Array.from({ length: 7 }, (_, i) => dayMinutes(i)).reduce((a, b) => a + b, 0);
+  return { sum, weeks, total, hours, daysTot, coveredDays, thisWeek, prevSame, chance, talk, devP, devM, firstOn, lastOff, togetherToday, togetherWeek };
+}
+const careBus = createBus();
+const getNotes = () => Data.load(k("vipNotes")) || {};
+function addNote(uid, text) {
+  const t = String(text || "").trim();
+  if (!t) return;
+  const all = getNotes();
+  (all[uid] ||= []).unshift({ id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, at: Date.now(), text: t.slice(0, 4000) });
+  Data.save(k("vipNotes"), all);
+  careBus.emit();
+}
+function deleteNote(uid, nid) {
+  const all = getNotes();
+  all[uid] = (all[uid] || []).filter((n) => n.id !== nid);
+  if (!all[uid].length) delete all[uid];
+  Data.save(k("vipNotes"), all);
+  careBus.emit();
+}
+const getDates = () => Data.load(k("vipDates")) || {};
+function setDates(uid, patch) {
+  const all = getDates();
+  all[uid] = { ...(all[uid] || {}), ...patch };
+  Data.save(k("vipDates"), all);
+  careBus.emit();
+}
+const friendsSince = (uid) => { const t = Date.parse(safe(() => RelationshipStore?.getSince?.(uid)) || ""); return isFriendOf(uid) && t ? t : null; };
+function datesOn(uid, day) {
+  const out = [];
+  const d = day.getDate(), m = day.getMonth() + 1, y = day.getFullYear();
+  const dd = getDates()[uid] || {};
+  const b = dd.birthday;
+  if (b && b.d === d && b.m === m) out.push({ key: "birthday", kind: "birthday", years: b.y && b.y < y ? y - b.y : null });
+  const fs = friendsSince(uid);
+  if (fs) { const f = new Date(fs); if (f.getDate() === d && f.getMonth() + 1 === m && f.getFullYear() < y) out.push({ key: "friends", kind: "friends", years: y - f.getFullYear() }); }
+  for (const c of dd.custom || []) {
+    if (c.d !== d || c.m !== m) continue;
+    if (c.yearly ? (!c.y || c.y <= y) : c.y === y) out.push({ key: `c:${c.id}`, kind: "custom", name: c.name, years: c.yearly && c.y && c.y < y ? y - c.y : null });
+  }
+  return out;
+}
+function dateText(uid, ev) {
+  const name = nameOf(uid, getVipList()[uid] || {});
+  if (ev.kind === "birthday") return ev.years ? L(`Hoje é aniversário de ${name}: ${ev.years} anos!`, `It's ${name}'s birthday today: ${ev.years}!`) : L(`Hoje é aniversário de ${name}!`, `It's ${name}'s birthday today!`);
+  if (ev.kind === "friends") return L(`Hoje faz ${ev.years} ${plural(ev.years, "ano", "anos")} que você e ${name} são amigos.`, `You and ${name} have been friends for ${ev.years} ${plural(ev.years, "year", "years")} today.`);
+  return ev.years ? L(`Hoje: ${ev.name} (${name}) · faz ${ev.years} ${plural(ev.years, "ano", "anos")}`, `Today: ${ev.name} (${name}) · ${ev.years} ${plural(ev.years, "year", "years")}`) : L(`Hoje: ${ev.name} (${name})`, `Today: ${ev.name} (${name})`);
+}
+function checkDates() {
+  const s = getSettings();
+  const now = new Date();
+  if (s.datesNotifyAt) {
+    const [hh, mm] = String(s.datesNotifyAt).split(":").map(Number);
+    const at = new Date(now);
+    at.setHours(hh || 0, mm || 0, 0, 0);
+    if (now < at) return;
+  }
+  const fired = Data.load(k("vipDatesFired")) || {};
+  const dayKey = isoDay(now.getTime());
+  let changed = false;
+  for (const uid of Object.keys(getVipList())) {
+    for (const ev of datesOn(uid, now)) {
+      const key = `${dayKey}|${uid}|${ev.key}`;
+      if (fired[key]) continue;
+      fired[key] = Date.now();
+      changed = true;
+      notify({ title: L("Data importante", "Important date"), text: dateText(uid, ev), icon: avatarOf(UserStore?.getUser?.(uid), uid), onClick: () => openApp([{ type: "home" }, { type: "vip" }, { type: "vipPerson", userId: uid }, { type: "vipNotes", userId: uid }]), toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound });
+    }
+  }
+  if (changed) {
+    const old = isoDay(now.getTime() - 40 * DAY);
+    for (const key of Object.keys(fired)) if (key.slice(0, 10) < old) delete fired[key];
+    Data.save(k("vipDatesFired"), fired);
+  }
+}
+let unusualCache = null;
+const unusualState = () => (unusualCache ??= Data.load(k("vipUnusual")) || {});
+function markUnusual(uid, field, value) { const st = unusualState(); (st[uid] ||= {})[field] = value; Data.save(k("vipUnusual"), st); }
+function checkOddHour(uid) {
+  if (!vipFlag(uid, "notifyUnusual")) return;
+  if (Date.now() - (unusualState()[uid]?.odd || 0) < 6 * 3600000) return;
+  const r = routineOf(uid);
+  if (r.coveredDays < 7 || r.total < 20 * 60) return;
+  const hr = new Date().getHours();
+  const share = (r.hours[hr] + 0.5 * r.hours[(hr + 23) % 24] + 0.5 * r.hours[(hr + 1) % 24]) / r.total;
+  if (share >= 0.01) return;
+  markUnusual(uid, "odd", Date.now());
+  const s = getSettings();
+  const name = nameOf(uid, getVipList()[uid] || {});
+  notify({ title: L("Fora do normal", "Out of the ordinary"), text: L(`${name} ficou online às ${pad(hr)}h, um horário em que quase nunca fica online.`, `${name} came online at ${pad(hr)}:00, a time they're almost never online.`), icon: avatarOf(UserStore?.getUser?.(uid), uid), onClick: () => openVip(uid), toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound });
+}
+function checkLongOnline() {
+  const today = startOfDay(Date.now());
+  const dayKey = isoDay(today);
+  const events = loadVip().events;
+  const s = getSettings();
+  for (const uid of Object.keys(getVipList())) {
+    if (!vipFlag(uid, "notifyLong") || unusualState()[uid]?.long === dayKey) continue;
+    const st = rawPresence(uid)?.status;
+    if (!st || st === "offline") continue;
+    const r = routineOf(uid);
+    if (r.coveredDays < 7 || !r.total) continue;
+    const avg = (r.total / r.coveredDays) * 60000;
+    const ms = onlineMs(uid, events, today);
+    if (avg < 10 * 60000 || ms < Math.max(avg * 2, avg + 2 * 3600000)) continue;
+    markUnusual(uid, "long", dayKey);
+    const name = nameOf(uid, getVipList()[uid] || {});
+    notify({ title: L("Fora do normal", "Out of the ordinary"), text: L(`${name} está online há ${fmtDur(ms)} hoje, bem mais que o normal (${fmtDur(avg)} por dia).`, `${name} has been online for ${fmtDur(ms)} today, far more than usual (${fmtDur(avg)} a day).`), icon: avatarOf(UserStore?.getUser?.(uid), uid), onClick: () => openVip(uid), toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound });
+  }
+}
+const REPLY_MAX = 400;
+let replyCache = null;
+let replyTimer = null;
+const getReplies = () => (replyCache ??= Data.load(k("vipReplies")) || {});
+function flushReplies() { clearTimeout(replyTimer); replyTimer = null; if (replyCache) Data.save(k("vipReplies"), replyCache); }
+function recordReply(uid, mine, at) {
+  const all = getReplies();
+  const arr = all[uid] || (all[uid] = []);
+  arr.push([at, mine ? 1 : 0]);
+  if (arr.length > REPLY_MAX) arr.splice(0, arr.length - REPLY_MAX);
+  clearTimeout(replyTimer);
+  replyTimer = setTimeout(flushReplies, 3000);
+}
+function replyStats(list, now = Date.now()) {
+  const arr = [...(list || [])].sort((a, b) => a[0] - b[0]);
+  const since = now - 30 * DAY;
+  const theirs = [], mine = [];
+  for (let i = 1; i < arr.length; i++) {
+    const [t, me] = arr[i];
+    const [pt, pme] = arr[i - 1];
+    if (me === pme || t < since) continue;
+    const gap = t - pt;
+    if (gap <= 0 || gap > 12 * 3600000) continue;
+    (me ? mine : theirs).push(gap);
+  }
+  return { theirs: theirs.length >= 3 ? median(theirs) : null, mine: mine.length >= 3 ? median(mine) : null, nTheirs: theirs.length, nMine: mine.length };
+}
+function agoraOf(id, online) {
+  const r = routineOf(id);
+  if (online) return r.lastOff != null ? L(`Costuma sair por volta das ${fmtClock(r.lastOff)}`, `Usually leaves around ${fmtClock(r.lastOff)}`) : null;
+  const parts = [];
+  if (r.firstOn != null) parts.push(L(`costuma entrar por volta das ${fmtClock(r.firstOn)}`, `usually comes online around ${fmtClock(r.firstOn)}`));
+  const max = Math.max(...r.hours);
+  if (r.coveredDays >= 3 && max > 0) {
+    const nowH = new Date().getHours();
+    for (let i = 1; i <= 12; i++) {
+      const hr = (nowH + i) % 24;
+      if (r.hours[hr] >= max * 0.5) { parts.push(L(`provável voltar por volta das ${hr}h`, `likely back around ${hr}:00`)); break; }
+    }
+  }
+  if (!parts.length) return null;
+  const txt = parts.join(" · ");
+  return txt.charAt(0).toUpperCase() + txt.slice(1);
 }
 const profileBus = createBus();
 const getProfileLog = () => Data.load(k("vipProfileLog")) || [];
@@ -3246,6 +3417,8 @@ const SI = {
   shield: "M12 2.5l7.5 3v6c0 4.6-3.2 8.4-7.5 10-4.3-1.6-7.5-5.4-7.5-10v-6z",
   storage: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6",
   refresh: "M21 12a9 9 0 1 1-2.64-6.36L21 8M21 3v5h-5",
+  gallery: "M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM3 16l5-5 4 4 3-3 6 6M15.5 9.5a1.5 1.5 0 1 0 0-.01",
+  notes: "M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM14 3v5h5M8.5 12h7M8.5 15.5h7M8.5 8.5h3",
   routine: "M8 2v3M16 2v3M4 5h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 10h18M7 14h2M11 14h2M15 14h2M7 17.5h2M11 17.5h2",
   sparkle: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
 };
@@ -3432,6 +3605,8 @@ function screenTitle(s) {
     case "person": return nameOf(s.userId, getHistory().find((r) => r.userId === s.userId) || {});
     case "vipPerson": return nameOf(s.userId, getVipList()[s.userId] || {});
     case "vipRoutine": return nameOf(s.userId, getVipList()[s.userId] || {});
+    case "vipGallery": return nameOf(s.userId, getVipList()[s.userId] || {});
+    case "vipNotes": return nameOf(s.userId, getVipList()[s.userId] || {});
     case "callPerson": return nameOf(s.userId);
     case "archives": return L("Mensagens antigas", "Old messages");
     case "archiveBlock": { const a = getArchives().find((x) => x.file === s.file); return a ? archivePeriod(a) : L("Arquivo", "Archive"); }
@@ -3537,6 +3712,8 @@ function ScreenRouter({ s }) {
     case "vip": return h(VipScreen);
     case "vipPerson": return h(VipPersonScreen, { userId: s.userId });
     case "vipRoutine": return h(VipRoutineScreen, { userId: s.userId });
+    case "vipGallery": return h(VipGalleryScreen, { userId: s.userId });
+    case "vipNotes": return h(VipNotesScreen, { userId: s.userId });
     case "calls": return h(CallsScreen);
     case "callPerson": return h(CallPersonScreen, { userId: s.userId });
     case "settings": return h(SettingsScreen);
@@ -4702,6 +4879,17 @@ function VipRoutineScreen({ userId: id }) {
     h(Group, { header: L("Melhor horário pra falar", "Best time to talk"), footer: L(`Chance de ${name} estar online nos horários em que você costuma estar com o Discord aberto.`, `How likely ${name} is to be online at the times you usually have Discord open.`) },
       windows.length ? windows.map((w) => row(hrRange(w.i, (w.i + 2) % 24), L(`online ${Math.round(w.v * 100)}% das vezes`, `online ${Math.round(w.v * 100)}% of the time`)))
         : h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-sub" }, L("Ainda coletando. Precisa de alguns dias com o seu Discord aberto em horários diferentes.", "Still collecting. It needs a few days of your Discord being open at different times."))))),
+    (() => {
+      const rs = replyStats(getReplies()[id]);
+      const fmt = (ms) => (ms < 60000 ? L("menos de 1 min", "under 1 min") : `~${fmtDur(ms)}`);
+      return h(Group, { header: L("Conversa no privado", "DM conversation"), footer: L("Últimos 30 dias, só no privado. Aparece depois de pelo menos 3 respostas de cada lado.", "Last 30 days, DMs only. Shows up after at least 3 replies from each side.") },
+        row(L(`${name} costuma responder em`, `${name} usually replies in`), rs.theirs != null ? fmt(rs.theirs) : collecting),
+        row(L("Você costuma responder em", "You usually reply in"), rs.mine != null ? fmt(rs.mine) : collecting));
+    })(),
+    h(Group, { header: L("Online juntos", "Online together"), footer: L(`Tempo em que ${name} esteve online com o seu Discord aberto.`, `Time ${name} was online while your Discord was open.`) },
+      row(L("Hoje", "Today"), fmtMin(r.togetherToday)),
+      row(L("Últimos 7 dias", "Last 7 days"), fmtMin(r.togetherWeek)),
+      row(L("Mais juntos", "Most together"), peak ? hrRange(peak.from, peak.to) : collecting)),
     h(HourBars, { title: L("Quando mais conversa", "When they talk the most"), sub: talkTop ? hrRange(talkTop.from, talkTop.to) : null,
       series: [{ key: "t", color: "var(--c-link)", values: r.talk }],
       tip: (i) => L(`${pad(i)}h · ${r.talk[i]} ${plural(r.talk[i], "mensagem ou digitação", "mensagens ou digitações")}`, `${pad(i)}h · ${r.talk[i]} ${plural(r.talk[i], "message or typing", "messages or typing")}`),
@@ -4710,6 +4898,126 @@ function VipRoutineScreen({ userId: id }) {
       series: [{ key: "p", color: "#5865f2", values: r.devP, label: "PC" }, { key: "m", color: "#bf5af2", values: r.devM, label: L("Celular", "Mobile") }],
       tip: (i) => `${pad(i)}h · PC ${fmtMin(r.devP[i])} · ${L("Celular", "Mobile")} ${fmtMin(r.devM[i])}`,
       empty: L("Ainda coletando. Vai preenchendo conforme o VIP fica online com o seu Discord aberto.", "Still collecting. It fills in as this VIP is online while your Discord is open.") }));
+}
+function galleryItems(uid) {
+  const items = [];
+  const pm = getProfileMedia()[uid] || {};
+  for (const field of ["avatar", "banner"]) {
+    for (const e of pm[field]?.list || []) {
+      if (!mediaFilePath(uid, e.file)) continue;
+      items.push({ key: `${field}:${e.file}`, kind: "profile", at: e.at || Files.stat(mediaFilePath(uid, e.file))?.at || 0, a: { name: field === "banner" ? "Banner" : L("Foto de perfil", "Avatar"), local: e.file, type: `image/${extOf(e.file) || "png"}` } });
+    }
+  }
+  for (const m of loadVip().messages) {
+    if (m.userId !== uid) continue;
+    (m.attachments || []).forEach((a, i) => {
+      if (!a.local || !mediaFilePath(uid, a.local)) return;
+      const kind = mediaKind(a);
+      items.push({ key: `${m.id}:${i}`, kind: kind === "video" ? "video" : kind === "image" ? "photo" : "file", at: m.createdAt || 0, a, deleted: !!m.deletedAt });
+    });
+  }
+  return items.sort((x, y) => y.at - x.at);
+}
+function VipGalleryScreen({ userId: id }) {
+  useBus(mediaBus, vipBus);
+  const [filter, setFilter] = useNavState("filter", "all");
+  const [limit, setLimit] = React.useState(60);
+  const entry = getVipList()[id];
+  if (!entry) return h(Empty, { icon: "star", title: L("Não está mais na Lista VIP", "No longer on your VIP list") });
+  const all = galleryItems(id);
+  const count = (k2) => all.filter((x) => x.kind === k2).length;
+  const list = filter === "all" ? all : all.filter((x) => x.kind === filter);
+  const opts = [["all", L("Tudo", "All"), all.length || null], ["profile", L("Perfil", "Profile"), count("profile") || null], ["photo", L("Fotos", "Photos"), count("photo") || null], ["video", L("Vídeos", "Videos"), count("video") || null]];
+  if (count("file")) opts.push(["file", L("Arquivos", "Files"), count("file")]);
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: L("Galeria", "Gallery"), subtitle: nameOf(id, entry) }),
+    all.length ? h(Segmented, { value: filter, onChange: (v) => { setFilter(v); setLimit(60); }, options: opts }) : null,
+    list.length ? groupByDay(list.slice(0, limit), (x) => x.at || Date.now()).map((g) => h("section", { key: g.label, className: "dmtt-sec" },
+      h("div", { className: "dmtt-sec-h" }, g.label),
+      h("div", { className: "dmtt-gallery" }, g.items.map((x) => h(MediaThumb, { key: x.key, uid: id, a: x.a, deleted: x.deleted })))))
+      : h(Empty, { icon: "gallery", title: L("Nada na galeria ainda", "Nothing in the gallery yet") }, L("Fotos de perfil, banners, fotos e vídeos que o Lurk salvar dessa pessoa aparecem aqui.", "Avatars, banners, photos and videos Lurk saves from this person show up here.")),
+    list.length > limit ? h("button", { className: "dmtt-more", onClick: () => setLimit(limit + 60) }, L("Mostrar mais", "Show more")) : null);
+}
+const MONTHS = () => L(["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"], ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]);
+const fmtDayMonth = (d, m, y) => L(`${d} de ${MONTHS()[m - 1]}${y ? ` de ${y}` : ""}`, `${MONTHS()[m - 1]} ${d}${y ? `, ${y}` : ""}`);
+function NoteComposer({ id }) {
+  const [text, setText] = React.useState("");
+  const add = () => { if (!text.trim()) return; addNote(id, text); setText(""); };
+  return h("div", { className: "dmtt-row dmtt-row-col" },
+    h("textarea", { className: "dmtt-text dmtt-textarea", rows: 3, placeholder: L("Escreva uma nota…", "Write a note…"), value: text, onChange: (e) => setText(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); add(); } } }),
+    h("div", { className: "dmtt-row-actions" }, h("button", { className: "dmtt-btn-primary", disabled: !text.trim(), onClick: add }, L("Adicionar nota", "Add note"))));
+}
+function BirthdayRow({ id }) {
+  const b = getDates()[id]?.birthday || null;
+  const [d, setD] = React.useState(b?.d || "");
+  const [m, setM] = React.useState(b?.m || "");
+  const [y, setY] = React.useState(b?.y || "");
+  const save = (nd, nm, ny) => {
+    const dd = Number(nd), mm = Number(nm), yy = Number(ny) || null;
+    if (dd && mm) setDates(id, { birthday: { d: dd, m: mm, y: yy && yy > 1900 && yy <= new Date().getFullYear() ? yy : null } });
+    else if (!nd && !nm) setDates(id, { birthday: null });
+  };
+  return h("div", { className: "dmtt-row dmtt-row-col" },
+    h("span", { className: "dmtt-row-title" }, L("Aniversário", "Birthday")),
+    h("div", { className: "dmtt-date-inputs" },
+      h("select", { className: "dmtt-select", value: d, onChange: (e) => { setD(e.target.value); save(e.target.value, m, y); } }, h("option", { value: "" }, L("Dia", "Day")), Array.from({ length: 31 }, (_, i) => h("option", { key: i, value: i + 1 }, i + 1))),
+      h("select", { className: "dmtt-select", value: m, onChange: (e) => { setM(e.target.value); save(d, e.target.value, y); } }, h("option", { value: "" }, L("Mês", "Month")), MONTHS().map((name, i) => h("option", { key: i, value: i + 1 }, name))),
+      h("input", { className: "dmtt-text dmtt-year", inputMode: "numeric", placeholder: L("Ano (opcional)", "Year (optional)"), value: y, onChange: (e) => setY(e.target.value.replace(/[^0-9]/g, "").slice(0, 4)), onBlur: () => save(d, m, y) }),
+      b ? h("button", { className: "dmtt-link", onClick: () => { setD(""); setM(""); setY(""); setDates(id, { birthday: null }); } }, L("Limpar", "Clear")) : null));
+}
+function CustomDateForm({ id }) {
+  const [name, setName] = React.useState("");
+  const [date, setDate] = React.useState("");
+  const [yearly, setYearly] = React.useState(true);
+  const add = () => {
+    const [yy, mm, dd] = date.split("-").map(Number);
+    if (!name.trim() || !dd || !mm) return;
+    const custom = [...(getDates()[id]?.custom || []), { id: Date.now().toString(36), name: name.trim().slice(0, 60), d: dd, m: mm, y: yy || null, yearly }];
+    setDates(id, { custom });
+    setName(""); setDate("");
+  };
+  return h("div", { className: "dmtt-row dmtt-row-col" },
+    h("span", { className: "dmtt-row-title" }, L("Nova data", "New date")),
+    h("input", { className: "dmtt-text", placeholder: L("Nome, ex.: Prova, Viagem", "Name, e.g. Exam, Trip"), value: name, onChange: (e) => setName(e.target.value) }),
+    h("div", { className: "dmtt-date-inputs" },
+      h("input", { className: "dmtt-text dmtt-date", type: "date", value: date, onChange: (e) => setDate(e.target.value) }),
+      h("label", { className: "dmtt-check-label" }, h(Switch, { checked: yearly, onChange: setYearly, label: L("Todo ano", "Every year") }), L("Todo ano", "Every year"))),
+    h("div", { className: "dmtt-row-actions" }, h("button", { className: "dmtt-btn-primary", disabled: !name.trim() || !date, onClick: add }, L("Adicionar data", "Add date"))));
+}
+function VipNotesScreen({ userId: id }) {
+  useBus(careBus, vipBus, settingsBus);
+  const entry = getVipList()[id];
+  if (!entry) return h(Empty, { icon: "star", title: L("Não está mais na Lista VIP", "No longer on your VIP list") });
+  const name = nameOf(id, entry);
+  const notes = getNotes()[id] || [];
+  const custom = getDates()[id]?.custom || [];
+  const since = friendsSince(id);
+  const years = since ? Math.floor((Date.now() - since) / (365.25 * DAY)) : 0;
+  const when = getSettings().datesNotifyAt;
+  return h(React.Fragment, null,
+    h(LargeTitle, { title: L("Notas", "Notes"), subtitle: name }),
+    h(Group, { header: L("Notas", "Notes"), footer: L("Só você vê. Ctrl+Enter também adiciona.", "Only you can see these. Ctrl+Enter also adds.") },
+      h(NoteComposer, { id }),
+      notes.map((n) => h("div", { key: n.id, className: "dmtt-row dmtt-note" },
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-note-text" }, n.text), h("span", { className: "dmtt-row-sub" }, `${fmtDateOnly(n.at)} ${fmtHM(n.at)}`)),
+        h("button", { className: "dmtt-del", title: L("Apagar nota", "Delete note"), onClick: () => confirmDanger(L("Apagar nota", "Delete note"), L("Apagar esta nota?", "Delete this note?"), () => deleteNote(id, n.id)) }, h(Icon, { d: ICON_X, size: 12 }))))),
+    h(Group, { header: L("Datas importantes", "Important dates"), footer: when ? L(`Você recebe um aviso no dia, às ${when}. Mude em Ajustes › Lista VIP.`, `You get a notification on the day, at ${when}. Change it in Settings › VIP list.`) : L("Você recebe um aviso no dia, ao abrir o Discord ou à meia-noite se ele já estiver aberto. Dá para escolher um horário em Ajustes › Lista VIP.", "You get a notification on the day, when you open Discord or at midnight if it's already open. You can pick a time in Settings › VIP list.") },
+      h(BirthdayRow, { id }),
+      h("div", { className: "dmtt-row" }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Amigos desde", "Friends since")), since ? h("span", { className: "dmtt-row-sub" }, L("Avisa no aniversário da amizade", "Notifies on your friendship anniversary")) : null),
+        h("span", { className: "dmtt-row-detail" }, since ? `${fmtDateOnly(since)}${years ? L(` · ${years} ${plural(years, "ano", "anos")}`, ` · ${years} ${plural(years, "year", "years")}`) : ""}` : L("Não são amigos no Discord", "Not friends on Discord"))),
+      custom.map((c) => h("div", { key: c.id, className: "dmtt-row" },
+        h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, c.name), h("span", { className: "dmtt-row-sub" }, `${fmtDayMonth(c.d, c.m, c.yearly ? null : c.y)}${c.yearly ? L(" · todo ano", " · every year") : ""}`)),
+        h("button", { className: "dmtt-del", title: L("Apagar data", "Delete date"), onClick: () => setDates(id, { custom: custom.filter((x) => x.id !== c.id) }) }, h(Icon, { d: ICON_X, size: 12 })))),
+      h(CustomDateForm, { id })));
+}
+function DatesTimeRow() {
+  useBus(settingsBus);
+  const v = getSettings().datesNotifyAt || "";
+  return h("div", { className: "dmtt-row" },
+    h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Horário do aviso", "Notification time"))),
+    h("select", { className: "dmtt-select", value: v ? "fixed" : "", onChange: (e) => setSetting("datesNotifyAt", e.target.value ? "09:00" : "") },
+      h("option", { value: "" }, L("Ao abrir o Discord", "When Discord opens")), h("option", { value: "fixed" }, L("Horário fixo", "Fixed time"))),
+    v ? h("input", { className: "dmtt-text dmtt-time", type: "time", value: v, onChange: (e) => setSetting("datesNotifyAt", e.target.value || "09:00") }) : null);
 }
 function WatchProfileRow({ id }) {
   useBus(profileBus);
@@ -4748,13 +5056,15 @@ function VipPersonScreen({ userId: id }) {
   const invis = d.events.filter((e) => e.userId === id && e.type === "invisible").length;
   const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
   const dm = ChannelStore?.getDMFromUserId?.(id);
-  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")]];
+  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
-    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips },
+    h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: (() => { const t = safe(() => agoraOf(id, !!p && p.status !== "offline")); return t ? h("div", { className: "dmtt-agora" }, t) : null; })() },
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
       typing.length ? h(ActionButton, { icon: h(SIcon, { d: SI.keyboard, size: 18 }), label: NAMES.typing(), onClick: () => nav.push({ type: "person", userId: id }) }) : null,
       h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
+      h(ActionButton, { icon: h(SIcon, { d: SI.gallery, size: 18 }), label: L("Galeria", "Gallery"), onClick: () => nav.push({ type: "vipGallery", userId: id }) }),
+      h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.star, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível", "invisible")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
@@ -4894,6 +5204,8 @@ function settingsPages() {
           num("mediaMaxFileMB", L("Tamanho máximo por arquivo", "Maximum size per file"), 1, 500, 5, "MB"),
           { ...num("mediaMaxProfileMB", L("Limite de fotos de perfil e banners", "Avatar and banner limit"), 50, 10000, 50, "MB"), after: () => scheduleMediaLimit() },
           { id: "mediaFolder", type: "custom", render: () => h(MediaFolderRow) }] },
+        { title: L("Datas importantes", "Important dates"), footer: L("Aniversários e datas que você anota nas Notas de cada VIP. Por padrão, o aviso sai ao abrir o Discord ou à meia-noite se ele já estiver aberto.", "Birthdays and dates you add in each VIP's Notes. By default the notification fires when you open Discord, or at midnight if it's already open."), items: [
+          { id: "datesNotifyAt", type: "custom", render: () => h(DatesTimeRow) }] },
         { title: L("Última vez online", "Last online"), footer: L("Aparece embaixo do nome dos VIPs. Só conta o que o Lurk viu com o seu Discord aberto.", "Shows under your VIPs' names. Only counts what Lurk saw while your Discord was open."), items: [
           { ...sw("vipLastSeen", L("Mostrar última vez online", "Show last online")), after: () => syncDOM() },
           { id: "vipLastSeenMode", label: L("Mostrar", "Show"), type: "select", options: [["offline", L("Só quando estiver offline", "Only when offline")], ["both", L("Offline e online", "Offline and online")]], after: () => syncDOM() },
@@ -5507,6 +5819,20 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-addid .dmtt-text { flex: 1; }
 .dmtt-addid .dmtt-btn-primary { height: 34px; flex: none; }
 .dmtt-btn-primary:disabled { opacity: .45; cursor: default; filter: none; }
+.dmtt-agora { margin-top: 8px; font-size: 12.5px; color: var(--c-muted); text-align: center; }
+.dmtt-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.dmtt-gallery .dmtt-media { width: 100%; height: auto; aspect-ratio: 1; }
+.dmtt-gallery .dmtt-media.is-file { aspect-ratio: auto; height: 40px; min-width: 0; }
+.dmtt-textarea { height: auto; min-height: 70px; padding: 8px 10px; resize: vertical; font-family: inherit; line-height: 1.4; }
+.dmtt-row-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dmtt-note { align-items: flex-start; }
+.dmtt-note-text { display: block; white-space: pre-wrap; word-break: break-word; color: var(--c-strong); }
+.dmtt-date-inputs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dmtt-date-inputs .dmtt-select { max-width: none; height: 34px; }
+.dmtt-year { width: 130px; }
+.dmtt-date { width: auto; min-width: 150px; color-scheme: dark; }
+.dmtt-time { width: 110px; margin-left: 8px; color-scheme: dark; }
+.dmtt-check-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
 .dmtt-addid-msg { font-size: 13px; min-height: 0; padding-top: 0; }
 .dmtt-addid-msg.is-ok { color: var(--c-green); }
 .dmtt-addid-msg.is-err { color: #ff6961; }
@@ -5680,6 +6006,8 @@ module.exports = class Lurk {
     Scheduler.once("identities", 10000, () => checkIdentities(true));
     Scheduler.every("watchProfile", 15 * 60000, () => checkWatchedProfile(), 20000);
     freqCache = null;
+    replyCache = null;
+    unusualCache = null;
     safe(() => { pruneFreq(); seedFreq(); });
     this.onKey = (e) => safe(() => onDiscreetKey(e));
     document.addEventListener("keydown", this.onKey, true);
@@ -5699,6 +6027,8 @@ module.exports = class Lurk {
     safe(() => afterUpdateCheck());
     Scheduler.every("update", 6 * 3600000, () => checkForUpdate(false), 20000);
     Scheduler.every("lastSeen", 30000, () => placeLastSeen());
+    Scheduler.every("dates", 30000, () => checkDates(), 15000);
+    Scheduler.every("longOnline", 5 * 60000, () => checkLongOnline(), 3 * 60000);
   }
 
   patchContextMenus() {
@@ -5754,6 +6084,7 @@ module.exports = class Lurk {
     try { UserStore?.removeChangeListener?.(onUserStoreChange); } catch {}
     Scheduler.stop();
     safe(() => flushFreq());
+    safe(() => flushReplies());
     document.removeEventListener("keydown", this.onKey, true); recordingShortcut = null;
     clearTimeout(identityTimer); identityTimer = null;
     snipeActive = false;
