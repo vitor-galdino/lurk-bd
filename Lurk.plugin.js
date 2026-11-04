@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.11.1
+ * @version 2.12.0
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.11.1";
+const VERSION = "2.12.0";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -52,6 +52,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.12.0", items: [
+    ["improved", "Perfil do VIP: botão vermelho Remover ao lado de Mensagem, Rotina, Galeria e Notas.", "VIP page: a red Remove button next to Message, Routine, Gallery and Notes."],
+  ] },
   { version: "2.11.1", items: [
     ["improved", "Mensagens editadas: as versões agora aparecem numa linha do tempo, com o horário à esquerda, o texto sempre alinhado e, entre uma versão e outra, quanto tempo a pessoa levou pra editar.", "Edited messages: versions now show as a timeline, with the time on the left, the text always lined up and, between versions, how long the person took to edit."],
   ] },
@@ -5138,7 +5141,8 @@ function VipPersonScreen({ userId: id }) {
       h(ActionButton, { icon: h(SIcon, { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", size: 18 }), label: L("Mensagem", "Message"), onClick: () => openDM(dm, id, false) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.routine, size: 18 }), label: L("Rotina", "Routine"), onClick: () => nav.push({ type: "vipRoutine", userId: id }) }),
       h(ActionButton, { icon: h(SIcon, { d: SI.gallery, size: 18 }), label: L("Galeria", "Gallery"), onClick: () => nav.push({ type: "vipGallery", userId: id }) }),
-      h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) })),
+      h(ActionButton, { icon: h(SIcon, { d: SI.notes, size: 18 }), label: L("Notas", "Notes"), onClick: () => nav.push({ type: "vipNotes", userId: id }) }),
+      h(ActionButton, { icon: h(SIcon, { d: SI.trash, size: 18 }), label: L("Remover", "Remove"), tone: "danger", onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })),
     h(Stats, { items: [[(() => { const ms = onlineMs(id, d.events, startOfDay(Date.now())); return ms >= 60000 ? fmtDur(ms) : L("0 min", "0 min"); })(), L("online hoje", "online today")], [mine.filter((m) => m.deletedAt).length, L("apagadas", "deleted")], [invis, L("invisível hoje", "invisible today")], [(d.voice || []).filter((v) => v.userId === id).length, "calls"]] }),
     h(VipAlerts, { id, toggles }),
     h(Segmented, { value: tab, onChange: setTab, options: [topt("activity", L("Atividade", "Activity")), topt("messages", L("Mensagens", "Messages")), topt("voice", vipVoice.has(id) ? "Calls ●" : "Calls"), topt("profile", L("Perfil", "Profile")), ["typing", L("Digitou", "Typed")]] }),
@@ -5146,8 +5150,7 @@ function VipPersonScreen({ userId: id }) {
       : tab === "activity" ? h(ActivityList, { id, events: d.events })
       : tab === "messages" ? h(MessagesList, { id, messages: d.messages })
       : tab === "voice" ? h(VoiceList, { id, sessions: d.voice || [] })
-      : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }),
-    h(Group, null, h(NavRow, { title: L("Remover da Lista VIP", "Remove from VIP list"), danger: true, onClick: () => confirmDanger(L("Remover da Lista VIP", "Remove from VIP list"), L(`Remover ${nameOf(id, entry)}? O histórico de status, calls e mensagens dela também será apagado.`, `Remove ${nameOf(id, entry)}? Their status, call and message history will be deleted too.`), () => { deleteVipData(id); setVip(id, null); nav.pop(); }, L("Remover", "Remove")) })));
+      : typing.length ? h(DayList, { items: typing, getTime: (r) => r.lastTypingAt, render: (r) => h(SessionRow, { key: r.id, r, showWhere: true }) }) : h(Empty, { icon: "keyboard", title: L("Nunca digitou e apagou", "Never typed & quit") }));
 }
 
 function CallsScreen() {
