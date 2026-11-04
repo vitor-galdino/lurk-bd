@@ -55,6 +55,7 @@ const CHANGELOG = [
   { version: "2.12.0", items: [
     ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
     ["improved", "Perfil do VIP: botão vermelho Remover ao lado de Mensagem, Rotina, Galeria e Notas.", "VIP page: a red Remove button next to Message, Routine, Gallery and Notes."],
+    ["improved", "\"Ficar online em hora incomum\" e \"Ficar online bem mais que o normal\" agora vêm desligados nos VIPs novos.", "\"They come online at an unusual time\" and \"They stay online far longer than usual\" are now off for new VIPs."],
   ] },
   { version: "2.11.1", items: [
     ["improved", "Mensagens editadas: as versões agora aparecem numa linha do tempo, com o horário à esquerda, o texto sempre alinhado e, entre uma versão e outra, quanto tempo a pessoa levou pra editar.", "Edited messages: versions now show as a timeline, with the time on the left, the text always lined up and, between versions, how long the person took to edit."],
@@ -635,7 +636,7 @@ function Flash({ isNew, children }) {
 }
 const MENTION_TYPES = ["ghost", "reply", "keyword", "reaction"];
 
-const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: true, notifyLong: true, notifyServers: false };
+const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: false, notifyLong: false, notifyServers: false };
 const getVipList = () => Data.load(k("vip")) || {};
 const isVip = (id) => !!getVipList()[id];
 const vipFlag = (id, field) => { const e = getVipList()[id]; return !!e && (e[field] ?? VIP_DEFAULT[field]); };
