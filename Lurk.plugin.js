@@ -55,6 +55,7 @@ const CHANGELOG = [
   { version: "2.12.0", items: [
     ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
     ["improved", "Perfil do VIP: botão vermelho Remover ao lado de Mensagem, Rotina, Galeria e Notas.", "VIP page: a red Remove button next to Message, Routine, Gallery and Notes."],
+    ["new", "Ajustes › Lista VIP › Ao adicionar um VIP: escolha quais avisos já vêm ligados em cada pessoa nova, com um botão pra aplicar esse padrão a todos os VIPs.", "Settings › VIP list › When adding a VIP: choose which alerts come turned on for each new person, with a button to apply those defaults to every VIP."],
     ["improved", "\"Ficar online em hora incomum\" e \"Ficar online bem mais que o normal\" agora vêm desligados nos VIPs novos.", "\"They come online at an unusual time\" and \"They stay online far longer than usual\" are now off for new VIPs."],
   ] },
   { version: "2.11.1", items: [
@@ -637,13 +638,18 @@ function Flash({ isNew, children }) {
 const MENTION_TYPES = ["ghost", "reply", "keyword", "reaction"];
 
 const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: false, notifyLong: false, notifyServers: false };
+const vipAlertList = () => [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyServers", L("Entrar ou sair de um servidor em comum", "They join or leave a shared server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
+function vipPreset() {
+  const p = getSettings().vipPreset || {};
+  return Object.fromEntries(vipAlertList().map(([f]) => [f, typeof p[f] === "boolean" ? p[f] : VIP_DEFAULT[f]]));
+}
 const getVipList = () => Data.load(k("vip")) || {};
 const isVip = (id) => !!getVipList()[id];
 const vipFlag = (id, field) => { const e = getVipList()[id]; return !!e && (e[field] ?? VIP_DEFAULT[field]); };
 function setVip(id, value) {
   const list = getVipList();
   if (value === null) delete list[id];
-  else list[id] = { ...VIP_DEFAULT, ...(list[id] || {}), ...value };
+  else list[id] = { ...VIP_DEFAULT, ...(list[id] ? {} : vipPreset()), ...(list[id] || {}), ...value };
   Data.save(k("vip"), list);
   if (value !== null) {
     if (!presenceCache.has(id)) presenceCache.set(id, rawPresence(id));
@@ -5224,6 +5230,29 @@ function DatesTimeRow() {
       h("option", { value: "" }, L("Ao abrir o Discord", "When Discord opens")), h("option", { value: "fixed" }, L("Horário fixo", "Fixed time"))),
     v ? h("input", { className: "dmtt-text dmtt-time", type: "time", "aria-label": L("Horário", "Time"), value: v, onChange: (e) => setSetting("datesNotifyAt", e.target.value || "09:00") }) : null);
 }
+function VipPresetRows() {
+  useBus(settingsBus, vipBus);
+  const preset = vipPreset();
+  const set = (f, v) => setSetting("vipPreset", { ...preset, [f]: v });
+  const count = Object.keys(getVipList()).length;
+  const apply = () => UI.showConfirmationModal(L("Aplicar a todos os VIPs", "Apply to all VIPs"), L(`Os avisos de ${count} ${plural(count, "pessoa", "pessoas")} da Lista VIP vão ficar iguais a este padrão. O que você mudou no perfil de cada um será substituído.`, `The alerts of ${count} ${plural(count, "person", "people")} on your VIP list will match these defaults. Changes you made on each person's page will be replaced.`), {
+    confirmText: L("Aplicar", "Apply"), cancelText: L("Cancelar", "Cancel"),
+    onConfirm: () => {
+      const list = getVipList();
+      for (const id of Object.keys(list)) list[id] = { ...list[id], ...preset };
+      Data.save(k("vip"), list);
+      vipBus.emit();
+      if (preset.notifyServers) Scheduler.once("serversNow", 5000, () => checkServers());
+      toast(L("Padrão aplicado a todos os VIPs", "Defaults applied to all VIPs"), { type: "success" });
+    },
+  });
+  return h(React.Fragment, null,
+    vipAlertList().map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => set(f, !preset[f]) },
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
+      h(Switch, { checked: preset[f], onChange: (v) => set(f, v), label: l }))),
+    count ? h("button", { className: "dmtt-row dmtt-row-action", onClick: apply },
+      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Aplicar a todos os VIPs", "Apply to all VIPs")))) : null);
+}
 function VipPersonScreen({ userId: id }) {
   useBus(vipBus, historyBus);
   useTicker(30000);
@@ -5246,7 +5275,7 @@ function VipPersonScreen({ userId: id }) {
   const invis = d.events.filter((e) => e.userId === id && e.type === "invisible" && e.at >= startOfDay(Date.now())).length;
   const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
   const dm = ChannelStore?.getDMFromUserId?.(id);
-  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyServers", L("Entrar ou sair de um servidor em comum", "They join or leave a shared server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
+  const toggles = vipAlertList();
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
     h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: (() => { const t = safe(() => agoraOf(id, !!p && p.status !== "offline")); return t ? h("div", { className: "dmtt-agora" }, t) : null; })() },
@@ -5379,6 +5408,8 @@ function settingsPages() {
         { ...sw("friendReqTrack", L("Pedidos de amizade cancelados", "Canceled friend requests"), L("Quem te manda pedido e retira. Suas recusas não entram.", "Someone sends you a request and takes it back. Requests you decline aren't listed.")), after: (v) => v && initPendingReqs() }] }] },
     { id: "vip", title: NAMES.vip(), icon: "star", color: "#ffcc00", summary: () => L(`${Object.keys(getVipList()).length} pessoas`, `${Object.keys(getVipList()).length} people`),
       sections: [
+        { title: L("Ao adicionar um VIP", "When adding a VIP"), footer: L("Avisos que já vêm ligados em cada pessoa nova da Lista VIP. Depois dá pra mudar no perfil de cada uma, em Avisar quando.", "Alerts that come turned on for each new person on your VIP list. You can still change them on each person's page, under Notify me when."), items: [
+          { id: "vipPreset", type: "custom", render: () => h(VipPresetRows) }] },
         { title: L("Servidores", "Servers"), items: [
           { ...sw("vipTrackServers", L("Digitou e apagou nos servidores", "Typed & quit in servers"), L("Experimental e com risco. Fica desligado por padrão.", "Experimental and risky. Off by default.")), after: (v) => v && scheduleSubscribe(),
             confirmOn: { title: () => L("Digitou e apagou nos servidores", "Typed & quit in servers"), confirm: () => L("Ligar mesmo assim", "Turn on anyway"),
@@ -5866,6 +5897,7 @@ button.dmtt-row:hover, .dmtt-row[style*="pointer"]:hover { background: var(--c-h
 button.dmtt-row, .dmtt-back, .dmtt-nav-icon, .dmtt-link, .dmtt-more, .dmtt-action, .dmtt-tile-card, .dmtt-filter, .dmtt-close { transition: background-color .15s ease; }
 button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,255,255,.08)); }
 .dmtt-row.is-danger .dmtt-row-title { color: var(--c-red); }
+.dmtt-row-action .dmtt-row-title { color: var(--c-link); }
 .dmtt-row-col { flex-direction: column; align-items: stretch; gap: 6px; }
 .dmtt-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .dmtt-row-title { font-size: 14.5px; font-weight: 500; color: var(--c-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
