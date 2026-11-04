@@ -55,7 +55,7 @@ const CHANGELOG = [
   { version: "2.12.0", items: [
     ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
     ["improved", "Perfil do VIP: botão vermelho Remover ao lado de Mensagem, Rotina, Galeria e Notas.", "VIP page: a red Remove button next to Message, Routine, Gallery and Notes."],
-    ["new", "Ajustes › Lista VIP › Ao adicionar um VIP: escolha quais avisos já vêm ligados em cada pessoa nova, com um botão pra aplicar esse padrão a todos os VIPs.", "Settings › VIP list › When adding a VIP: choose which alerts come turned on for each new person, with a button to apply those defaults to every VIP."],
+    ["new", "Ajustes › Lista VIP › Ao adicionar um VIP: escolha quais avisos já vêm ligados em cada pessoa nova. Se quiser, dá pra usar esse padrão também nos VIPs que já estão na lista.", "Settings › VIP list › When adding a VIP: choose which alerts come turned on for each new person. You can also use those defaults on people already on your list."],
     ["improved", "\"Ficar online em hora incomum\" e \"Ficar online bem mais que o normal\" agora vêm desligados nos VIPs novos.", "\"They come online at an unusual time\" and \"They stay online far longer than usual\" are now off for new VIPs."],
   ] },
   { version: "2.11.1", items: [
@@ -5231,27 +5231,30 @@ function DatesTimeRow() {
     v ? h("input", { className: "dmtt-text dmtt-time", type: "time", "aria-label": L("Horário", "Time"), value: v, onChange: (e) => setSetting("datesNotifyAt", e.target.value || "09:00") }) : null);
 }
 function VipPresetRows() {
-  useBus(settingsBus, vipBus);
+  useBus(settingsBus);
   const preset = vipPreset();
   const set = (f, v) => setSetting("vipPreset", { ...preset, [f]: v });
+  return h(React.Fragment, null, vipAlertList().map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => set(f, !preset[f]) },
+    h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
+    h(Switch, { checked: preset[f], onChange: (v) => set(f, v), label: l }))));
+}
+function VipPresetApply() {
+  useBus(settingsBus, vipBus);
   const count = Object.keys(getVipList()).length;
-  const apply = () => UI.showConfirmationModal(L("Aplicar a todos os VIPs", "Apply to all VIPs"), L(`Os avisos de ${count} ${plural(count, "pessoa", "pessoas")} da Lista VIP vão ficar iguais a este padrão. O que você mudou no perfil de cada um será substituído.`, `The alerts of ${count} ${plural(count, "person", "people")} on your VIP list will match these defaults. Changes you made on each person's page will be replaced.`), {
-    confirmText: L("Aplicar", "Apply"), cancelText: L("Cancelar", "Cancel"),
+  const label = L("Usar nos VIPs que já estão na lista", "Use on people already on the list");
+  const apply = () => UI.showConfirmationModal(L(`Trocar os avisos de ${count} ${plural(count, "VIP", "VIPs")}?`, `Replace the alerts of ${count} ${plural(count, "VIP", "VIPs")}?`), L("Os avisos de todas as pessoas da sua Lista VIP vão ficar iguais a esse padrão. O que você ajustou no perfil de cada uma será perdido.", "Every person on your VIP list will get these default alerts. What you set on each person's page will be lost."), {
+    danger: true, confirmText: L("Trocar avisos", "Replace alerts"), cancelText: L("Cancelar", "Cancel"),
     onConfirm: () => {
+      const preset = vipPreset();
       const list = getVipList();
       for (const id of Object.keys(list)) list[id] = { ...list[id], ...preset };
       Data.save(k("vip"), list);
       vipBus.emit();
       if (preset.notifyServers) Scheduler.once("serversNow", 5000, () => checkServers());
-      toast(L("Padrão aplicado a todos os VIPs", "Defaults applied to all VIPs"), { type: "success" });
+      toast(L(`Avisos de ${count} ${plural(count, "VIP trocados", "VIPs trocados")} pelo padrão`, `Alerts of ${count} ${plural(count, "VIP", "VIPs")} replaced with the defaults`), { type: "success" });
     },
   });
-  return h(React.Fragment, null,
-    vipAlertList().map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => set(f, !preset[f]) },
-      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
-      h(Switch, { checked: preset[f], onChange: (v) => set(f, v), label: l }))),
-    count ? h("button", { className: "dmtt-row dmtt-row-action", onClick: apply },
-      h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Aplicar a todos os VIPs", "Apply to all VIPs")))) : null);
+  return h("button", { className: "dmtt-row dmtt-row-action", onClick: apply }, h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, label)));
 }
 function VipPersonScreen({ userId: id }) {
   useBus(vipBus, historyBus);
@@ -5408,8 +5411,10 @@ function settingsPages() {
         { ...sw("friendReqTrack", L("Pedidos de amizade cancelados", "Canceled friend requests"), L("Quem te manda pedido e retira. Suas recusas não entram.", "Someone sends you a request and takes it back. Requests you decline aren't listed.")), after: (v) => v && initPendingReqs() }] }] },
     { id: "vip", title: NAMES.vip(), icon: "star", color: "#ffcc00", summary: () => L(`${Object.keys(getVipList()).length} pessoas`, `${Object.keys(getVipList()).length} people`),
       sections: [
-        { title: L("Ao adicionar um VIP", "When adding a VIP"), footer: L("Avisos que já vêm ligados em cada pessoa nova da Lista VIP. Depois dá pra mudar no perfil de cada uma, em Avisar quando.", "Alerts that come turned on for each new person on your VIP list. You can still change them on each person's page, under Notify me when."), items: [
+        { title: L("Ao adicionar um VIP", "When adding a VIP"), footer: L("Salvo na hora. Vale pra cada pessoa que você adicionar daqui pra frente, e os VIPs que você já tem não mudam.", "Saved right away. Applies to everyone you add from now on, and people already on your list don't change."), items: [
           { id: "vipPreset", type: "custom", render: () => h(VipPresetRows) }] },
+        { showIf: () => Object.keys(getVipList()).length > 0, footer: L("Opcional. Troca os avisos de todos os VIPs atuais por esse padrão, inclusive o que você ajustou em cada um.", "Optional. Replaces the alerts of everyone already on your list with these defaults, including what you set for each person."), items: [
+          { id: "vipPresetApply", type: "custom", render: () => h(VipPresetApply) }] },
         { title: L("Servidores", "Servers"), items: [
           { ...sw("vipTrackServers", L("Digitou e apagou nos servidores", "Typed & quit in servers"), L("Experimental e com risco. Fica desligado por padrão.", "Experimental and risky. Off by default.")), after: (v) => v && scheduleSubscribe(),
             confirmOn: { title: () => L("Digitou e apagou nos servidores", "Typed & quit in servers"), confirm: () => L("Ligar mesmo assim", "Turn on anyway"),
@@ -5519,7 +5524,7 @@ function SettingsPageScreen({ id }) {
   if (!page) return null;
   return h(React.Fragment, null,
     h(LargeTitle, { title: page.title }),
-    page.sections.map((sec, i) => h(Group, { key: i, header: sec.title, footer: sec.footer }, sec.items.filter((item) => !item.showIf || item.showIf(getSettings())).map((item) => h(SettingRow, { key: item.id + i, item })))),
+    page.sections.filter((sec) => !sec.showIf || sec.showIf()).map((sec, i) => h(Group, { key: i, header: sec.title, footer: sec.footer }, sec.items.filter((item) => !item.showIf || item.showIf(getSettings())).map((item) => h(SettingRow, { key: item.id + i, item })))),
     page.custom ? page.custom() : null);
 }
 
