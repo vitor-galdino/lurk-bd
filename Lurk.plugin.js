@@ -4368,19 +4368,30 @@ function profileChangeText(e) {
     case "pronouns": return [L("mudou os pronomes", "changed their pronouns"), `${e.from || "—"} → ${e.to || "—"}`];
     case "bio": return [e.to ? L("mudou a bio", "changed their bio") : L("apagou a bio", "cleared their bio"), null];
     case "connection": return [e.action === "added" ? L(`conectou ${connName(e.conn?.type)}`, `connected ${connName(e.conn?.type)}`) : L(`removeu ${connName(e.conn?.type)}`, `removed ${connName(e.conn?.type)}`), e.conn?.name || null];
-    case "guildJoin": return [L("entrou num servidor em comum", "joined a shared server"), e.guildName];
-    case "guildLeave": return [L("saiu de um servidor em comum", "left a shared server"), e.guildName];
+    case "guildJoin": return [L("entrou num servidor em comum", "joined a shared server"), null];
+    case "guildLeave": return [L("saiu de um servidor em comum", "left a shared server"), null];
     default: return [e.field, null];
   }
 }
-const fmtSpan = (a, b) => (startOfDay(a) === startOfDay(b) ? L(`entre ${fmtDM(a)} e ${fmtHM(b)}`, `between ${fmtDM(a)} and ${fmtHM(b)}`) : L(`entre ${fmtDM(a)} e ${fmtDM(b)}`, `between ${fmtDM(a)} and ${fmtDM(b)}`));
-function serverLines(e) {
-  if (e.field === "guildJoin") return e.joinFrom ? [L(`Entrada: ${fmtSpan(e.joinFrom, e.joinTo)}`, `Joined: ${fmtSpan(e.joinFrom, e.joinTo)}`)] : [];
-  return [
-    e.joinedAt ? L(`Entrada: ${fmtDM(e.joinedAt)}`, `Joined: ${fmtDM(e.joinedAt)}`) : L("Entrada: antes de você ligar o aviso", "Joined: before you turned on the alert"),
-    L(`Saída: ${fmtSpan(e.leftFrom, e.leftTo)}`, `Left: ${fmtSpan(e.leftFrom, e.leftTo)}`),
-    e.joinedAt ? L(`Ficou cerca de ${fmtDur(leaveStay(e))}`, `Stayed about ${fmtDur(leaveStay(e))}`) : null,
-  ].filter(Boolean);
+const fmtWindow = (a, b) => (b - a < 120000 ? fmtDM(b) : startOfDay(a) === startOfDay(b) ? `${fmtDM(a)}–${fmtHM(b)}` : [`${fmtDM(a)} –`, fmtDM(b)]);
+function GuildPill({ id, name }) {
+  const g = safe(() => GuildStore?.getGuild?.(id));
+  const label = g?.name || name || L("Servidor", "Server");
+  const initials = label.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  return h("span", { className: "dmtt-srv-pill", title: label },
+    g?.icon ? h("img", { className: "dmtt-srv-ico", src: `https://cdn.discordapp.com/icons/${id}/${g.icon}.png?size=32`, alt: "" }) : h("span", { className: "dmtt-srv-ico", "aria-hidden": "true" }, initials),
+    h("span", { className: "dmtt-srv-name" }, label));
+}
+function ServerFacts({ e }) {
+  const cells = e.field === "guildJoin"
+    ? (e.joinFrom ? [[L("Entrou", "Joined"), fmtWindow(e.joinFrom, e.joinTo)]] : [])
+    : [[L("Entrou", "Joined"), e.joinedAt ? fmtDM(e.joinedAt) : L("Antes do aviso", "Before the alert")],
+      [L("Saiu", "Left"), fmtWindow(e.leftFrom, e.leftTo)],
+      [L("Ficou", "Stayed"), e.joinedAt ? `~${fmtDur(leaveStay(e))}` : "—", true]];
+  if (!cells.length) return null;
+  return h("span", { className: "dmtt-srv-facts", style: { gridTemplateColumns: `repeat(${cells.length}, auto)` } }, cells.map(([k, v, strong]) => h("span", { key: k, className: "dmtt-srv-fact" },
+    h("span", { className: "dmtt-srv-k" }, k),
+    h("span", { className: `dmtt-srv-v${strong ? " is-strong" : ""}` }, Array.isArray(v) ? v.map((x, i) => h("span", { key: i, className: "dmtt-srv-line" }, x)) : v))));
 }
 function ProfileChangeRow({ e, isNew, showName }) {
   const [what, detail] = profileChangeText(e);
@@ -4393,7 +4404,8 @@ function ProfileChangeRow({ e, isNew, showName }) {
       e.field === "avatar" ? h("span", { className: "dmtt-pc-imgs" }, h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.from, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.from) }), h("span", { className: "dmtt-pc-arrow" }, "→"), h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.to, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.to) })) : null,
       e.field === "banner" ? h("span", { className: "dmtt-pc-imgs" }, e.from ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.from, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.from) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner")), h("span", { className: "dmtt-pc-arrow" }, "→"), e.to ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.to, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.to) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner"))) : null,
       e.field === "bio" ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Antes: ", "Before: ")), e.from || "—"), h("div", null, h("b", null, L("Depois: ", "After: ")), e.to || "—")) : null,
-      e.field === "guildJoin" || e.field === "guildLeave" ? serverLines(e).map((t, i) => h("span", { key: i, className: "dmtt-row-sub" }, t)) : null,
+      e.field === "guildJoin" || e.field === "guildLeave" ? h(GuildPill, { id: e.guildId, name: e.guildName }) : null,
+      e.field === "guildJoin" || e.field === "guildLeave" ? h(ServerFacts, { e }) : null,
       e.away ? h("span", { className: "dmtt-row-sub" }, L("Mudou enquanto seu Discord estava fechado", "Changed while your Discord was closed")) : null),
     h("span", { className: "dmtt-row-time", title: fmtDate(e.at) }, e.away ? L(`visto ${fmtAgo(e.at)}`, `noticed ${fmtAgo(e.at)}`) : fmtHM(e.at)));
 }
@@ -6063,6 +6075,15 @@ button.dmtt-fr > .dmtt-chev { align-self: center; }
 .dmtt-fr-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .dmtt-bulk .dmtt-bar { margin-top: 6px; }
 .dmtt-pc-what { font-weight: 400; color: var(--text-muted); }
+.dmtt-srv-pill { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start; max-width: 100%; margin-top: 5px; padding: 3px 10px 3px 3px; border-radius: 999px; background: var(--c-fill2); color: var(--c-strong); font-size: 13px; font-weight: 600; }
+.dmtt-srv-ico { width: 20px; height: 20px; flex: none; border-radius: 50%; object-fit: cover; background: #5865f2; color: #fff; font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.dmtt-srv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dmtt-srv-facts { display: grid; gap: 1px; width: fit-content; max-width: 100%; margin-top: 8px; border-radius: 10px; overflow: hidden; background: var(--c-sep); }
+.dmtt-srv-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 6px 12px 7px; background: var(--c-fill2); }
+.dmtt-srv-k { font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--c-muted); }
+.dmtt-srv-v { font-size: 12.5px; color: var(--c-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dmtt-srv-line { display: block; }
+.dmtt-srv-v.is-strong { font-weight: 700; color: var(--c-strong); }
 .dmtt-pc .dmtt-fr-name b { font-weight: 600; }
 .dmtt-pc-imgs { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .dmtt-pc-av { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
