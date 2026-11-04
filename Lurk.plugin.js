@@ -53,6 +53,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.12.0", items: [
+    ["new", "Lista VIP: novo aviso \"Entrar ou sair de um servidor em comum\", desligado por padrão. As entradas e saídas aparecem no Histórico VIP › Perfil com o servidor, a entrada, a saída e quanto tempo a pessoa ficou.", "VIP list: a new \"They join or leave a shared server\" alert, off by default. Joins and leaves show up in VIP history › Profile with the server, when they joined, when they left and how long they stayed."],
     ["improved", "Perfil do VIP: botão vermelho Remover ao lado de Mensagem, Rotina, Galeria e Notas.", "VIP page: a red Remove button next to Message, Routine, Gallery and Notes."],
   ] },
   { version: "2.11.1", items: [
@@ -634,7 +635,7 @@ function Flash({ isNew, children }) {
 }
 const MENTION_TYPES = ["ghost", "reply", "keyword", "reaction"];
 
-const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: true, notifyLong: true };
+const VIP_DEFAULT = { notifyOnline: true, notifyTyping: true, notifyInvisible: true, notifyVoice: true, notifyMessage: false, notifyUnusual: true, notifyLong: true, notifyServers: false };
 const getVipList = () => Data.load(k("vip")) || {};
 const isVip = (id) => !!getVipList()[id];
 const vipFlag = (id, field) => { const e = getVipList()[id]; return !!e && (e[field] ?? VIP_DEFAULT[field]); };
@@ -3068,6 +3069,91 @@ async function checkWatchedProfile() {
     if (body && typeof body === "object") applyWatchedProfile(id, profileFromBody(body), false);
   } catch (e) { diag.profileWatch = `${e?.status || ""} ${e?.message || e}`.slice(0, 200); saveDiag(); }
 }
+const SERVER_EVERY = 3600000;
+const getGuildTrack = () => Data.load(k("vipGuilds")) || {};
+const myGuildIds = () => new Set(Object.keys(safe(() => GuildStore?.getGuilds?.()) || {}));
+const guildNameOf = (gid, fallback) => safe(() => GuildStore?.getGuild?.(gid)?.name) || fallback || L("servidor", "server");
+const tsOf = (v) => { const t = typeof v === "number" ? v : Date.parse(v || ""); return Number.isFinite(t) && t > 0 ? t : null; };
+const localJoinedAt = (gid, uid) => tsOf(safe(() => GuildMemberStore?.getMember?.(gid, uid)?.joinedAt));
+const pauseMs = (ms) => new Promise((r) => setTimeout(r, ms));
+function rateLimited(e) {
+  if ((e?.status || e?.statusCode) !== 429) return false;
+  profilePauseUntil = Date.now() + (Number(e?.body?.retry_after || e?.retry_after) || 30) * 1000 + 1000;
+  return true;
+}
+async function fetchMutualGuilds(uid) {
+  const res = await RestAPI.get({ url: `/users/${uid}/profile`, query: { with_mutual_guilds: true, with_mutual_friends: false }, oldFormErrors: true });
+  const body = res?.body || res;
+  return Array.isArray(body?.mutual_guilds) ? body.mutual_guilds.map((g) => g?.id).filter(Boolean) : null;
+}
+async function fetchJoinedAt(uid, gid) {
+  const res = await RestAPI.get({ url: `/users/${uid}/profile`, query: { guild_id: gid, with_mutual_guilds: false, with_mutual_friends: false }, oldFormErrors: true });
+  const body = res?.body || res;
+  return tsOf(body?.guild_member?.joined_at);
+}
+function notifyServerEvent(e) {
+  const s = getSettings();
+  const name = nameOf(e.userId, getVipList()[e.userId] || {});
+  const text = e.field === "guildJoin"
+    ? L(`${name} entrou no servidor ${e.guildName}.`, `${name} joined the server ${e.guildName}.`)
+    : e.joinedAt ? L(`${name} saiu do servidor ${e.guildName} depois de ficar cerca de ${fmtDur(leaveStay(e))} lá.`, `${name} left the server ${e.guildName} after about ${fmtDur(leaveStay(e))} there.`)
+    : L(`${name} saiu do servidor ${e.guildName}.`, `${name} left the server ${e.guildName}.`);
+  notify({ title: L("Servidor em comum", "Shared server"), text, icon: avatarOf(UserStore?.getUser?.(e.userId), e.userId), onClick: () => openVip(e.userId), toast: s.vipToast, desktop: s.vipDesktop, sound: s.vipSound });
+}
+const leaveStay = (e) => Math.max(0, (e.leftFrom + e.leftTo) / 2 - e.joinedAt);
+let serversBusy = false;
+async function checkServers() {
+  if (serversBusy || !RestAPI || Date.now() < profilePauseUntil) return;
+  const mine = myGuildIds();
+  if (!mine.size) return;
+  serversBusy = true;
+  try {
+    const track = getGuildTrack();
+    const vips = Object.keys(getVipList()).filter((id) => vipFlag(id, "notifyServers"));
+    for (const id of Object.keys(track)) if (!vips.includes(id)) delete track[id];
+    let backfill = 1;
+    let stop = false;
+    for (const uid of vips) {
+      if (!lurkAlive || stop) break;
+      const now = Date.now();
+      let ids = null;
+      try { ids = await fetchMutualGuilds(uid); } catch (e) { if (rateLimited(e)) break; }
+      if (!ids) { await pauseMs(3000); continue; }
+      const prev = track[uid];
+      const cur = new Set(ids);
+      const next = { checkedAt: now, mine: [...mine], guilds: {} };
+      const evs = [];
+      for (const gid of cur) {
+        const old = prev?.guilds?.[gid];
+        if (old) { next.guilds[gid] = { ...old, name: guildNameOf(gid, old.name), joinedAt: old.joinedAt || localJoinedAt(gid, uid) }; continue; }
+        const g = { name: guildNameOf(gid), joinedAt: localJoinedAt(gid, uid) };
+        if (prev && (prev.mine || []).includes(gid)) {
+          if (!g.joinedAt && !stop) { try { g.joinedAt = await fetchJoinedAt(uid, gid); } catch (e) { if (rateLimited(e)) stop = true; } await pauseMs(2000); }
+          const fresh = !g.joinedAt || g.joinedAt >= prev.checkedAt - 10 * 60000;
+          if (fresh) evs.push({ userId: uid, at: g.joinedAt || now, field: "guildJoin", guildId: gid, guildName: g.name, ...(g.joinedAt ? {} : { joinFrom: prev.checkedAt, joinTo: now }) });
+        }
+        next.guilds[gid] = g;
+      }
+      if (prev) for (const [gid, old] of Object.entries(prev.guilds || {})) {
+        if (cur.has(gid) || !mine.has(gid)) continue;
+        evs.push({ userId: uid, at: now, field: "guildLeave", guildId: gid, guildName: guildNameOf(gid, old.name), joinedAt: old.joinedAt || null, leftFrom: prev.checkedAt, leftTo: now });
+      }
+      if (backfill > 0 && !stop) {
+        const gid = Object.keys(next.guilds).find((x) => !next.guilds[x].joinedAt);
+        if (gid) {
+          backfill--;
+          try { next.guilds[gid].joinedAt = await fetchJoinedAt(uid, gid); } catch (e) { if (rateLimited(e)) stop = true; }
+          await pauseMs(2000);
+        }
+      }
+      track[uid] = next;
+      Data.save(k("vipGuilds"), track);
+      if (evs.length) { addProfileEvents(evs); for (const e of evs) safe(() => notifyServerEvent(e)); }
+      await pauseMs(3000);
+    }
+    Data.save(k("vipGuilds"), track);
+  } finally { serversBusy = false; }
+}
 function onProfileFetched(a) {
   try {
     const id = a?.user?.id;
@@ -4282,8 +4368,19 @@ function profileChangeText(e) {
     case "pronouns": return [L("mudou os pronomes", "changed their pronouns"), `${e.from || "—"} → ${e.to || "—"}`];
     case "bio": return [e.to ? L("mudou a bio", "changed their bio") : L("apagou a bio", "cleared their bio"), null];
     case "connection": return [e.action === "added" ? L(`conectou ${connName(e.conn?.type)}`, `connected ${connName(e.conn?.type)}`) : L(`removeu ${connName(e.conn?.type)}`, `removed ${connName(e.conn?.type)}`), e.conn?.name || null];
+    case "guildJoin": return [L("entrou num servidor em comum", "joined a shared server"), e.guildName];
+    case "guildLeave": return [L("saiu de um servidor em comum", "left a shared server"), e.guildName];
     default: return [e.field, null];
   }
+}
+const fmtSpan = (a, b) => (startOfDay(a) === startOfDay(b) ? L(`entre ${fmtDM(a)} e ${fmtHM(b)}`, `between ${fmtDM(a)} and ${fmtHM(b)}`) : L(`entre ${fmtDM(a)} e ${fmtDM(b)}`, `between ${fmtDM(a)} and ${fmtDM(b)}`));
+function serverLines(e) {
+  if (e.field === "guildJoin") return e.joinFrom ? [L(`Entrada: ${fmtSpan(e.joinFrom, e.joinTo)}`, `Joined: ${fmtSpan(e.joinFrom, e.joinTo)}`)] : [];
+  return [
+    e.joinedAt ? L(`Entrada: ${fmtDM(e.joinedAt)}`, `Joined: ${fmtDM(e.joinedAt)}`) : L("Entrada: antes de você ligar o aviso", "Joined: before you turned on the alert"),
+    L(`Saída: ${fmtSpan(e.leftFrom, e.leftTo)}`, `Left: ${fmtSpan(e.leftFrom, e.leftTo)}`),
+    e.joinedAt ? L(`Ficou cerca de ${fmtDur(leaveStay(e))}`, `Stayed about ${fmtDur(leaveStay(e))}`) : null,
+  ].filter(Boolean);
 }
 function ProfileChangeRow({ e, isNew, showName }) {
   const [what, detail] = profileChangeText(e);
@@ -4296,17 +4393,18 @@ function ProfileChangeRow({ e, isNew, showName }) {
       e.field === "avatar" ? h("span", { className: "dmtt-pc-imgs" }, h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.from, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.from) }), h("span", { className: "dmtt-pc-arrow" }, "→"), h(ProfileImg, { uid: e.userId, field: "avatar", hash: e.to, className: "dmtt-pc-av", fallback: avatarImg(e.userId, e.to) })) : null,
       e.field === "banner" ? h("span", { className: "dmtt-pc-imgs" }, e.from ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.from, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.from) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner")), h("span", { className: "dmtt-pc-arrow" }, "→"), e.to ? h(ProfileImg, { uid: e.userId, field: "banner", hash: e.to, className: "dmtt-pc-banner", fallback: bannerImg(e.userId, e.to) }) : h("span", { className: "dmtt-pc-none" }, L("sem banner", "no banner"))) : null,
       e.field === "bio" ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Antes: ", "Before: ")), e.from || "—"), h("div", null, h("b", null, L("Depois: ", "After: ")), e.to || "—")) : null,
+      e.field === "guildJoin" || e.field === "guildLeave" ? serverLines(e).map((t, i) => h("span", { key: i, className: "dmtt-row-sub" }, t)) : null,
       e.away ? h("span", { className: "dmtt-row-sub" }, L("Mudou enquanto seu Discord estava fechado", "Changed while your Discord was closed")) : null),
     h("span", { className: "dmtt-row-time", title: fmtDate(e.at) }, e.away ? L(`visto ${fmtAgo(e.at)}`, `noticed ${fmtAgo(e.at)}`) : fmtHM(e.at)));
 }
 function ProfileFeed({ userId }) {
   useBus(profileBus, vipBus);
   const seen = seenSnap(userId ? `vip:${userId}:profile` : "vipHist:profile");
-  const list = getProfileLog().filter((e) => isVip(e.userId) && (!userId || e.userId === userId));
+  const list = getProfileLog().filter((e) => isVip(e.userId) && (!userId || e.userId === userId)).sort((a, b) => b.at - a.at);
   const watch = getProfileWatch();
   const watchName = watch && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
   return h(React.Fragment, null,
-    !userId ? h(Group, { footer: watchName ? L(`Nome, @ e foto são registrados pra todos os VIPs. Contas conectadas, bio, pronomes e banner só de ${watchName}, conferido a cada 15 minutos.`, `Name, username and avatar are logged for every VIP. Connected accounts, bio, pronouns and banner only for ${watchName}, checked every 15 minutes.`) : L("Nome, @ e foto são registrados pra todos os VIPs. Pra ver também contas conectadas, bio, pronomes e banner, ligue \"Monitorar perfil\" no perfil de um VIP.", "Name, username and avatar are logged for every VIP. To also see connected accounts, bio, pronouns and banner, turn on \"Watch profile\" on a VIP's page.") }) : null,
+    !userId ? h(Group, { footer: (watchName ? L(`Nome, @ e foto são registrados pra todos os VIPs. Contas conectadas, bio, pronomes e banner só de ${watchName}, conferido a cada 15 minutos.`, `Name, username and avatar are logged for every VIP. Connected accounts, bio, pronouns and banner only for ${watchName}, checked every 15 minutes.`) : L("Nome, @ e foto são registrados pra todos os VIPs. Pra ver também contas conectadas, bio, pronomes e banner, ligue \"Monitorar perfil\" no perfil de um VIP.", "Name, username and avatar are logged for every VIP. To also see connected accounts, bio, pronouns and banner, turn on \"Watch profile\" on a VIP's page.")) + L(" Entradas e saídas de servidores em comum aparecem pros VIPs com esse aviso ligado.", " Joins and leaves of shared servers show up for VIPs with that alert on.") }) : null,
     list.length ? h(DayList, { items: list, getTime: (e) => e.at, render: (e, i) => h(Flash, { key: `${e.at}-${i}`, isNew: e.at > seen }, h(ProfileChangeRow, { e, isNew: false, showName: !userId })) })
       : h(Empty, { icon: "star", title: L("Nenhuma mudança de perfil ainda", "No profile changes yet") }));
 }
@@ -4868,13 +4966,14 @@ function VipAlerts({ id, toggles }) {
   const watching = watch === id;
   const other = watch && watch !== id && isVip(watch) ? nameOf(watch, getVipList()[watch] || {}) : null;
   const me = nameOf(id, getVipList()[id] || {});
+  const setFlag = (f, v) => { setVip(id, { [f]: v }); if (f === "notifyServers" && v) Scheduler.once("serversNow", 5000, () => checkServers()); };
   const toggleWatch = (v) => {
     if (v && other) return UI.showConfirmationModal(L("Monitorar perfil", "Watch profile"), L(`Só dá pra monitorar uma pessoa por vez. Trocar ${other} por ${me}?`, `You can only watch one person at a time. Switch from ${other} to ${me}?`), { confirmText: L("Trocar", "Switch"), cancelText: L("Cancelar", "Cancel"), onConfirm: () => setProfileWatch(id) });
     setProfileWatch(v ? id : null);
   };
   const summary = !on.length ? L("Nenhum aviso", "No alerts") : on.length === toggles.length ? L("Todos ligados", "All on") : L(`${on.length} de ${toggles.length} ligados`, `${on.length} of ${toggles.length} on`);
   const sub = [off.length && on.length ? L(`Desligados: ${off.map(([, l]) => l.toLowerCase()).join(", ")}`, `Off: ${off.map(([, l]) => l.toLowerCase()).join(", ")}`) : null, watching ? L("Monitorando o perfil", "Watching profile") : null].filter(Boolean).join(" · ");
-  const footer = open ? [L("Como o aviso chega (Discord, Windows, som) fica em Ajustes › Avisos.", "How you're notified (Discord, Windows, sound) is in Settings › Notifications."), watching ? L("O perfil é conferido a cada 15 minutos.", "The profile is checked every 15 minutes.") : other ? L(`Agora monitorando o perfil de ${other}.`, `Now watching ${other}'s profile.`) : null].filter(Boolean).join(" ") : null;
+  const footer = open ? [L("Como o aviso chega (Discord, Windows, som) fica em Ajustes › Avisos.", "How you're notified (Discord, Windows, sound) is in Settings › Notifications."), watching ? L("O perfil é conferido a cada 15 minutos.", "The profile is checked every 15 minutes.") : other ? L(`Agora monitorando o perfil de ${other}.`, `Now watching ${other}'s profile.`) : null, vipFlag(id, "notifyServers") ? L("Os servidores em comum são conferidos a cada 1 hora, então a saída aparece com o intervalo em que aconteceu.", "Shared servers are checked every hour, so a leave shows the window it happened in.") : null].filter(Boolean).join(" ") : null;
   return h(Group, { footer },
     h("div", { className: `dmtt-cell ${open ? "is-open" : ""}` },
       h("button", { className: "dmtt-row", "aria-expanded": open, onClick: () => setOpen(!open) },
@@ -4882,9 +4981,9 @@ function VipAlerts({ id, toggles }) {
         h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Avisar quando", "Notify me when")), !open && sub ? h("span", { className: "dmtt-row-sub" }, sub) : null),
         h("span", { className: "dmtt-row-detail" }, summary),
         h("span", { className: "dmtt-chev dmtt-chev-rot" }, h(Icon, { d: ICON_CHEVRON, size: 14 })))),
-    open ? toggles.map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => setVip(id, { [f]: !vipFlag(id, f) }) },
+    open ? toggles.map(([f, l]) => h("div", { key: f, className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => setFlag(f, !vipFlag(id, f)) },
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, l)),
-      h(Switch, { checked: vipFlag(id, f), onChange: (v) => setVip(id, { [f]: v }), label: l }))) : null,
+      h(Switch, { checked: vipFlag(id, f), onChange: (v) => setFlag(f, v), label: l }))) : null,
     open ? h("div", { key: "watch", className: "dmtt-row", style: { cursor: "pointer" }, onClick: () => toggleWatch(!watching) },
       h("span", { className: "dmtt-row-main" }, h("span", { className: "dmtt-row-title" }, L("Monitorar perfil", "Watch profile")), h("span", { className: "dmtt-row-sub" }, L("Contas conectadas, bio, pronomes e banner. Uma pessoa por vez.", "Connected accounts, bio, pronouns and banner. One person at a time."))),
       h(Switch, { checked: watching, onChange: toggleWatch, label: L("Monitorar perfil", "Watch profile") })) : null);
@@ -5134,7 +5233,7 @@ function VipPersonScreen({ userId: id }) {
   const invis = d.events.filter((e) => e.userId === id && e.type === "invisible" && e.at >= startOfDay(Date.now())).length;
   const chips = [friend ? L("Amigo", "Friend") : friend === false ? L("Não é amigo", "Not a friend") : null, vipVoice.has(id) ? L("Em call agora", "In a call now") : p && p.status !== "offline" ? h(StatusWithDevices, { text: STATUS_PT[p.status], devices: p.devices }) : null].filter(Boolean);
   const dm = ChannelStore?.getDMFromUserId?.(id);
-  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
+  const toggles = [["notifyOnline", L("Ficar online", "They come online")], ["notifyTyping", L("Começar a digitar", "They start typing")], ["notifyInvisible", L("For visto invisível", "They're seen invisible")], ["notifyVoice", L("Entrar em call", "They join a call")], ["notifyMessage", L("Mandar mensagem num servidor", "They send a message in a server")], ["notifyServers", L("Entrar ou sair de um servidor em comum", "They join or leave a shared server")], ["notifyUnusual", L("Ficar online em hora incomum", "They come online at an unusual time")], ["notifyLong", L("Ficar online bem mais que o normal", "They stay online far longer than usual")]];
   const topt = (v, label) => { const n = tabCount(v); return [v, label, n || null, !!n]; };
   return h(React.Fragment, null,
     h(Hero, { userId: id, status, name: nameOf(id, entry), username: usernameOf(id), chips, below: (() => { const t = safe(() => agoraOf(id, !!p && p.status !== "offline")); return t ? h("div", { className: "dmtt-agora" }, t) : null; })() },
@@ -6118,6 +6217,7 @@ module.exports = class Lurk {
     saveDiag();
     Scheduler.once("identities", 10000, () => checkIdentities(true));
     Scheduler.every("watchProfile", 15 * 60000, () => checkWatchedProfile(), 20000);
+    Scheduler.every("servers", SERVER_EVERY, () => checkServers(), 90000);
     freqCache = null;
     replyCache = null;
     unusualCache = null;
