@@ -45,6 +45,7 @@ function seedChannelData() {
 }
 seedChannelData();
 const UPDATE_URL = `https://raw.githubusercontent.com/${REPO}/main/Lurk.plugin.js`;
+const RELEASE_URL = `https://github.com/${REPO}/releases/download`;
 const UPDATE_KEYS = [
   "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgzsb/BybDBFlRtuf+h7CzzL2fCwv6UB/ZWrwCW6QOEYCrfs0i98nGKu5RfmqflmrCQxzxPFLtSfgsgDnFxCV7g==",
   "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErGKKuLINLNb8jUacny/XD7TtIn+CBLv99OVs9JjRIlyRNM/lqUFAxPUKmJlDCraTwx25BzyL8KtdyT7p8OUh1g==",
@@ -435,7 +436,8 @@ async function checkForUpdate(manual = false) {
     if (cmpVer(remote, VERSION) <= 0) { if (manual) toast(L(`O Lurk ${VERSION} é a versão mais recente.`, `Lurk ${VERSION} is up to date.`), { type: "success" }); return; }
     const sigText = await fetchText(`${UPDATE_URL}.sig?t=${Date.now()}`);
     if (!(await verifySignature(code, sigText))) throw new Error(L("assinatura da atualização inválida, nada foi instalado", "update signature is invalid, nothing was installed"));
-    await installUpdate(code);
+    const fromRelease = await fetchText(`${RELEASE_URL}/v${remote}/Lurk.plugin.js`).catch(() => null);
+    await installUpdate(fromRelease && (await verifySignature(fromRelease, sigText)) ? fromRelease : code);
     if (manual) toast(L(`Atualizando pra o Lurk ${remote}…`, `Updating to Lurk ${remote}…`), { type: "success" });
   } catch (e) {
     updater.error = String(e?.message || e);
