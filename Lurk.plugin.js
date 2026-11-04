@@ -52,7 +52,7 @@ const UPDATE_KEYS = [
 
 const CHANGELOG = [
   { version: "2.11.1", items: [
-    ["improved", "Mensagens editadas: as versões agora aparecem numa linha do tempo, com o horário à esquerda, o texto sempre alinhado e quanto tempo depois cada edição foi feita.", "Edited messages: versions now show as a timeline, with the time on the left, the text always lined up and how long after each edit was made."],
+    ["improved", "Mensagens editadas: as versões agora aparecem numa linha do tempo, com o horário à esquerda, o texto sempre alinhado e, entre uma versão e outra, quanto tempo a pessoa levou pra editar.", "Edited messages: versions now show as a timeline, with the time on the left, the text always lined up and, between versions, how long the person took to edit."],
   ] },
   { version: "2.11.0", items: [
     ["new", "Lista VIP: botão Notas em cada VIP, com notas pessoais datadas e datas importantes (aniversário, desde quando são amigos e datas livres que podem repetir todo ano). No dia, o Lurk avisa ao abrir o Discord ou à meia-noite; dá para escolher um horário em Ajustes › Lista VIP.", "VIP list: a Notes button on each VIP with dated personal notes and important dates (birthday, how long you've been friends and custom dates that can repeat every year). On the day, Lurk notifies you when Discord opens or at midnight; you can pick a time in Settings › VIP list."],
@@ -4729,13 +4729,24 @@ function MessageEntry({ m, body, edited, who }) {
 function VersionTimeline({ m }) {
   const vs = [{ at: m.createdAt, content: m.content }, ...(m.edits || [])];
   const last = vs.length - 1;
-  return h("div", { className: "dmtt-ver", role: "list" }, vs.map((v, i) => h("div", {
-    key: i, role: "listitem", className: `dmtt-ver-row${i === 0 ? " is-first" : ""}${i === last ? " is-last" : ""}`,
-    "aria-label": i === 0 ? L(`Original, ${fmtHM(v.at)}`, `Original, ${fmtHM(v.at)}`) : L(`Edição às ${fmtHM(v.at)}, ${fmtDur(v.at - vs[i - 1].at)} depois`, `Edit at ${fmtHM(v.at)}, ${fmtDur(v.at - vs[i - 1].at)} later`),
-  },
-    h("span", { className: "dmtt-ver-time", title: fmtDate(v.at) }, fmtHM(v.at), i > 0 ? h("span", { className: "dmtt-ver-gap" }, `+${fmtDur(v.at - vs[i - 1].at)}`) : null),
-    h("span", { className: "dmtt-ver-rail", "aria-hidden": "true" }, h("span", { className: "dmtt-ver-dot" })),
-    h("span", { className: "dmtt-ver-text" }, v.content || NO_TEXT()))));
+  const rows = [];
+  vs.forEach((v, i) => {
+    if (i > 0) {
+      const gap = fmtDur(v.at - vs[i - 1].at);
+      rows.push(h("div", { key: `g${i}`, className: "dmtt-ver-row is-gap", "aria-hidden": "true" },
+        h("span", { className: "dmtt-ver-time" }),
+        h("span", { className: "dmtt-ver-rail" }),
+        h("span", { className: "dmtt-ver-gap" }, L(`${gap} depois`, `${gap} later`))));
+    }
+    rows.push(h("div", {
+      key: i, role: "listitem", className: `dmtt-ver-row${i === 0 ? " is-first" : ""}${i === last ? " is-last" : ""}`,
+      "aria-label": i === 0 ? L(`Original, ${fmtHM(v.at)}`, `Original, ${fmtHM(v.at)}`) : L(`Edição às ${fmtHM(v.at)}, ${fmtDur(v.at - vs[i - 1].at)} depois`, `Edit at ${fmtHM(v.at)}, ${fmtDur(v.at - vs[i - 1].at)} later`),
+    },
+      h("span", { className: "dmtt-ver-time", title: fmtDate(v.at) }, fmtHM(v.at)),
+      h("span", { className: "dmtt-ver-rail", "aria-hidden": "true" }, h("span", { className: "dmtt-ver-dot" })),
+      h("span", { className: "dmtt-ver-text" }, v.content || NO_TEXT())));
+  });
+  return h("div", { className: "dmtt-ver", role: "list" }, rows);
 }
 
 function PeerStack({ peers, max = 4 }) {
@@ -5852,18 +5863,19 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-quote b { color: var(--c-text); font-weight: 600; }
 .dmtt-ver { display: grid; grid-template-columns: auto 14px 1fr; column-gap: 8px; font-size: 12.5px; padding: 2px 0 2px 2px; }
 .dmtt-ver-row { display: contents; }
-.dmtt-ver-time { display: flex; flex-direction: column; align-items: flex-end; padding: 1px 0 8px; color: var(--c-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 16px; }
-.dmtt-ver-gap { font-size: 10.5px; line-height: 13px; opacity: .8; }
+.dmtt-ver-time { padding-top: 1px; color: var(--c-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 16px; text-align: right; }
 .dmtt-ver-rail { position: relative; }
 .dmtt-ver-rail::before, .dmtt-ver-rail::after { content: ""; position: absolute; left: 50%; width: 1.5px; margin-left: -.75px; background: var(--c-sep); }
 .dmtt-ver-rail::before { top: 0; height: 5px; }
 .dmtt-ver-rail::after { top: 15px; bottom: 0; }
 .dmtt-ver-row.is-first .dmtt-ver-rail::before, .dmtt-ver-row.is-last .dmtt-ver-rail::after { display: none; }
+.dmtt-ver-row.is-gap .dmtt-ver-rail::before { top: 0; bottom: 0; height: auto; }
+.dmtt-ver-row.is-gap .dmtt-ver-rail::after { display: none; }
 .dmtt-ver-dot { position: absolute; top: 5px; left: 50%; width: 8px; height: 8px; margin-left: -4px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--c-muted); }
 .dmtt-ver-row.is-last .dmtt-ver-dot { background: var(--c-link); border-color: var(--c-link); }
-.dmtt-ver-text { padding: 1px 0 8px; line-height: 16px; color: var(--c-muted); white-space: pre-wrap; word-break: break-word; min-width: 0; }
-.dmtt-ver-row.is-last .dmtt-ver-text, .dmtt-ver-row.is-last .dmtt-ver-time, .dmtt-ver-row.is-last .dmtt-ver-rail { padding-bottom: 2px; }
+.dmtt-ver-text { padding-top: 1px; line-height: 16px; color: var(--c-muted); white-space: pre-wrap; word-break: break-word; min-width: 0; }
 .dmtt-ver-row.is-last .dmtt-ver-text { color: var(--c-text); }
+.dmtt-ver-gap { padding: 6px 0; font-size: 10.5px; line-height: 13px; color: var(--c-muted); opacity: .75; }
 .dmtt-files { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12.5px; }
 .dmtt-files a { color: var(--c-link); }
 .dmtt-kw { color: var(--c-strong); background: rgba(255,159,10,.22); padding: 0 5px; border-radius: 5px; font-weight: 600; }
