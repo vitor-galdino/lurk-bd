@@ -36,7 +36,8 @@ Add people from their right-click menu or by user ID, and Lurk keeps a closer wa
 - **Voice calls**: channel, who was there, how long, and mute, deafen, camera and screen-share changes.
 - **Routine**: a map of the days and hours they're usually online over the last 4 weeks, their most active hours and day, daily average, when they usually come online and leave, this week compared with last week, the best time to talk to them, when they talk the most, whether they're on desktop or mobile, how long each of you usually takes to reply in DMs, and how long you're both online together.
 - **Unusual activity**: optional alerts when a VIP comes online at an hour they almost never do, or stays online much longer than usual.
-- Per-VIP choice of which events notify you, including when they send a message in a server.
+- **Shared servers**: an optional alert when a VIP joins or leaves a server you share. The VIP history shows the server, when they joined, when they left and how long they stayed.
+- Per-VIP choice of which events notify you, including when they send a message in a server, plus default alerts for each new VIP in Settings.
 
 ### 🕘 VIP history
 A single feed (clock button in the top bar) with an unread badge:
@@ -44,7 +45,7 @@ A single feed (clock button in the top bar) with an unread badge:
 - **Search** through all VIP messages by text, person, channel or server, optionally including old messages.
 - **Old messages**: when VIP messages reach the limit, the oldest ones are archived instead of deleted. Browse, search or delete each archive right inside Lurk.
 - **Status**: every status change.
-- **Profile**: name, username, avatar, connections, bio, pronouns and banner changes.
+- **Profile**: name, username, avatar, connections, bio, pronouns and banner changes, and shared servers joined or left.
 - **People**: each VIP with their full history.
 
 ### @ Mentions
