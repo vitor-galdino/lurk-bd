@@ -2,7 +2,7 @@
  * @name Lurk
  * @author Vitor
  * @authorLink https://github.com/vitor-galdino
- * @version 2.11.0
+ * @version 2.11.1
  * @description See who typed to you and gave up, catch ghost pings and deleted messages, and keep an eye on your VIPs.
  * @website https://github.com/vitor-galdino/lurk-bd
  * @source https://github.com/vitor-galdino/lurk-bd/blob/main/Lurk.plugin.js
@@ -12,7 +12,7 @@
 
 const PLUGIN = "Lurk";
 const LEGACY = "DMTypingTracker";
-const VERSION = "2.11.0";
+const VERSION = "2.11.1";
 const REPO = "vitor-galdino/lurk-bd";
 const RELEASE_CHANNEL = (() => {
   try {
@@ -51,6 +51,9 @@ const UPDATE_KEYS = [
 ];
 
 const CHANGELOG = [
+  { version: "2.11.1", items: [
+    ["improved", "Mensagens editadas: as versões agora aparecem numa linha do tempo, com o horário à esquerda, o texto sempre alinhado e quanto tempo depois cada edição foi feita.", "Edited messages: versions now show as a timeline, with the time on the left, the text always lined up and how long after each edit was made."],
+  ] },
   { version: "2.11.0", items: [
     ["new", "Lista VIP: botão Notas em cada VIP, com notas pessoais datadas e datas importantes (aniversário, desde quando são amigos e datas livres que podem repetir todo ano). No dia, o Lurk avisa ao abrir o Discord ou à meia-noite; dá para escolher um horário em Ajustes › Lista VIP.", "VIP list: a Notes button on each VIP with dated personal notes and important dates (birthday, how long you've been friends and custom dates that can repeat every year). On the day, Lurk notifies you when Discord opens or at midnight; you can pick a time in Settings › VIP list."],
     ["new", "Lista VIP: botão Galeria com todas as fotos de perfil, banners, fotos e vídeos salvos de cada VIP, separados por data.", "VIP list: a Gallery button with every saved avatar, banner, photo and video of each VIP, grouped by date."],
@@ -4596,9 +4599,7 @@ function ChangeCard({ m, isNew, showPlace }) {
     body, bodyTone: deleted ? "deleted" : null,
     extra: h(React.Fragment, null, h(MediaStrip, { m }), edits.length ? h(React.Fragment, null,
       h("button", { className: "dmtt-link", onClick: () => setOpen(!open) }, open ? L("Esconder versões", "Hide versions") : L(`Ver ${edits.length + 1} versões`, `See ${edits.length + 1} versions`)),
-      open ? h("div", { className: "dmtt-quote" },
-        h("div", null, h("b", null, `${L("Original", "Original")} · ${fmtHM(m.createdAt)}: `), m.content || NO_TEXT()),
-        edits.map((e, i) => h("div", { key: i }, h("b", null, `${fmtHM(e.at)}: `), e.content || NO_TEXT()))) : null) : null),
+      open ? h(VersionTimeline, { m }) : null) : null),
     onJump: deleted ? null : () => jumpTo(m.guildId, m.channelId, m.id),
   });
 }
@@ -4721,8 +4722,20 @@ function MessageEntry({ m, body, edited, who }) {
       h("span", { className: "dmtt-row-time" }, fmtHM(m.createdAt))),
     body ? h("div", { className: `dmtt-bubble ${m.deletedAt ? "is-deleted" : ""}` }, body) : null,
     h(MediaStrip, { m }),
-    open ? h("div", { className: "dmtt-quote" }, h("div", null, h("b", null, L("Original: ", "Original: ")), m.content || NO_TEXT()), m.edits.map((e, i) => h("div", { key: i }, h("b", null, `${fmtHM(e.at)}: `), e.content || NO_TEXT()))) : null,
+    open ? h(VersionTimeline, { m }) : null,
     !m.deletedAt ? h("button", { className: "dmtt-link", onClick: () => jumpTo(m.guildId, m.channelId, m.id) }, L("Ir pra mensagem", "Jump to message")) : null);
+}
+
+function VersionTimeline({ m }) {
+  const vs = [{ at: m.createdAt, content: m.content }, ...(m.edits || [])];
+  const last = vs.length - 1;
+  return h("div", { className: "dmtt-ver", role: "list" }, vs.map((v, i) => h("div", {
+    key: i, role: "listitem", className: `dmtt-ver-row${i === 0 ? " is-first" : ""}${i === last ? " is-last" : ""}`,
+    "aria-label": i === 0 ? L(`Original, ${fmtHM(v.at)}`, `Original, ${fmtHM(v.at)}`) : L(`Edição às ${fmtHM(v.at)}, ${fmtDur(v.at - vs[i - 1].at)} depois`, `Edit at ${fmtHM(v.at)}, ${fmtDur(v.at - vs[i - 1].at)} later`),
+  },
+    h("span", { className: "dmtt-ver-time", title: fmtDate(v.at) }, fmtHM(v.at), i > 0 ? h("span", { className: "dmtt-ver-gap" }, `+${fmtDur(v.at - vs[i - 1].at)}`) : null),
+    h("span", { className: "dmtt-ver-rail", "aria-hidden": "true" }, h("span", { className: "dmtt-ver-dot" })),
+    h("span", { className: "dmtt-ver-text" }, v.content || NO_TEXT()))));
 }
 
 function PeerStack({ peers, max = 4 }) {
@@ -5837,6 +5850,20 @@ button.dmtt-row:active { background: var(--background-modifier-active, rgba(255,
 .dmtt-bubble.is-deleted { color: #ff6961; }
 .dmtt-quote { padding: 4px 10px; border-left: 2px solid var(--c-sep); font-size: 12.5px; color: var(--c-muted); white-space: pre-wrap; word-break: break-word; display: flex; flex-direction: column; gap: 2px; }
 .dmtt-quote b { color: var(--c-text); font-weight: 600; }
+.dmtt-ver { display: grid; grid-template-columns: auto 14px 1fr; column-gap: 8px; font-size: 12.5px; padding: 2px 0 2px 2px; }
+.dmtt-ver-row { display: contents; }
+.dmtt-ver-time { display: flex; flex-direction: column; align-items: flex-end; padding: 1px 0 8px; color: var(--c-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 16px; }
+.dmtt-ver-gap { font-size: 10.5px; line-height: 13px; opacity: .8; }
+.dmtt-ver-rail { position: relative; }
+.dmtt-ver-rail::before, .dmtt-ver-rail::after { content: ""; position: absolute; left: 50%; width: 1.5px; margin-left: -.75px; background: var(--c-sep); }
+.dmtt-ver-rail::before { top: 0; height: 5px; }
+.dmtt-ver-rail::after { top: 15px; bottom: 0; }
+.dmtt-ver-row.is-first .dmtt-ver-rail::before, .dmtt-ver-row.is-last .dmtt-ver-rail::after { display: none; }
+.dmtt-ver-dot { position: absolute; top: 5px; left: 50%; width: 8px; height: 8px; margin-left: -4px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--c-muted); }
+.dmtt-ver-row.is-last .dmtt-ver-dot { background: var(--c-link); border-color: var(--c-link); }
+.dmtt-ver-text { padding: 1px 0 8px; line-height: 16px; color: var(--c-muted); white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.dmtt-ver-row.is-last .dmtt-ver-text, .dmtt-ver-row.is-last .dmtt-ver-time, .dmtt-ver-row.is-last .dmtt-ver-rail { padding-bottom: 2px; }
+.dmtt-ver-row.is-last .dmtt-ver-text { color: var(--c-text); }
 .dmtt-files { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12.5px; }
 .dmtt-files a { color: var(--c-link); }
 .dmtt-kw { color: var(--c-strong); background: rgba(255,159,10,.22); padding: 0 5px; border-radius: 5px; font-weight: 600; }
